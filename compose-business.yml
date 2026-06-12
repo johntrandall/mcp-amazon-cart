@@ -1,0 +1,56 @@
+# mcp-amazon-cart-business — Portainer stack
+#
+# Sibling of compose-personal.yml. Same image, distinct container name,
+# distinct volume, distinct ports, distinct AMAZON_DOMAIN.
+#
+# Ports (corrected 2026-06-12 — original briefing said 8936/5936 but
+# 8936 = chase-mcp-onprem is already in use per
+# inventories/MCP-Server-Inventory.md). Business stack takes
+# 8938 (HTTP) + 5938 (VNC).
+#
+# See compose-personal.yml for full annotation; this file keeps comments
+# minimal to highlight only the per-stack deltas.
+
+services:
+  mcp-amazon-cart-business:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-amazon-cart:local
+    container_name: mcp-amazon-cart-business
+    restart: unless-stopped
+
+    mem_limit: 3g
+    cpu_shares: 1024
+    shm_size: 2gb
+
+    ports:
+      - "8938:3000"
+      - "5938:5900"
+
+    environment:
+      # business.amazon.com — Track 3's amazon-business.ts module reads
+      # AMAZON_DOMAIN to switch the BASE_URL between consumer and B2B.
+      AMAZON_DOMAIN: business.amazon.com
+      USER_DATA_DIR: /data/user-data
+      HEADLESS: "true"
+      MCP_HTTP_PORT: "3000"
+      DISPLAY: ":99"
+      DISPLAY_NUM: "99"
+      VNC_PORT: "5900"
+      AUTH_TOKEN: ${AUTH_TOKEN}
+      VNC_PASSWORD: ${VNC_PASSWORD}
+      PUSHOVER_APP_TOKEN: ${PUSHOVER_APP_TOKEN}
+      PUSHOVER_USER_KEY: ${PUSHOVER_USER_KEY}
+      TZ: "America/New_York"
+
+    volumes:
+      - mcp-amazon-cart-business_user-data:/data/user-data
+
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
+
+volumes:
+  mcp-amazon-cart-business_user-data:
+    name: mcp-amazon-cart-business_user-data
