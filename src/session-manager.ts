@@ -1,41 +1,34 @@
-import { Page } from 'puppeteer';
+import { BrowserContext, Page, Cookie } from 'patchright';
 import fs from 'fs';
 import path from 'path';
 
 const COOKIES_FILE = path.resolve('./user-data/amazon-session-cookies.json');
 
-interface SerializedCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expires: number;
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite: 'Strict' | 'Lax' | 'None';
-}
-
 /**
- * Save current Amazon cookies to a JSON file with extended expiration
- * This works around session-only cookies that expire when browser closes
+ * Save current Amazon cookies to a JSON file with extended expiration.
+ * This works around session-only cookies that expire when the browser closes.
+ *
+ * Note: with launchPersistentContext, the user-data dir already persists cookies
+ * across restarts; this explicit JSON export is a belt-and-suspenders backup
+ * (and a way to convert session cookies → persistent ones).
  */
-export async function saveAmazonSession(page: Page): Promise<void> {
+export async function saveAmazonSession(context: BrowserContext): Promise<void> {
   try {
-    const cookies = await page.cookies();
-    const amazonCookies = cookies.filter(c => c.domain.includes('amazon'));
+    const cookies = await context.cookies();
+    const amazonCookies = cookies.filter((c) => c.domain.includes('amazon'));
 
-    // Convert session cookies to persistent ones by setting expiration
-    const oneYearFromNow = Date.now() / 1000 + (365 * 24 * 60 * 60);
-    const persistentCookies = amazonCookies.map(cookie => ({
+    // Convert session cookies (expires === -1 in Playwright) to persistent
+    // ones by setting expiration to 1 year out.
+    const oneYearFromNow = Date.now() / 1000 + 365 * 24 * 60 * 60;
+    const persistentCookies = amazonCookies.map((cookie) => ({
       ...cookie,
-      // If cookie has no expiration (session cookie), set it to 1 year from now
       expires: cookie.expires && cookie.expires > 0 ? cookie.expires : oneYearFromNow,
     }));
 
     fs.writeFileSync(COOKIES_FILE, JSON.stringify(persistentCookies, null, 2));
     console.log(`✓ Saved ${persistentCookies.length} Amazon cookies to ${COOKIES_FILE}`);
 
-    const sessionCookies = amazonCookies.filter(c => !c.expires || c.expires === -1);
+    const sessionCookies = amazonCookies.filter((c) => !c.expires || c.expires === -1);
     if (sessionCookies.length > 0) {
       console.log(`  Converted ${sessionCookies.length} session cookies to persistent cookies`);
     }
@@ -45,10 +38,10 @@ export async function saveAmazonSession(page: Page): Promise<void> {
 }
 
 /**
- * Restore Amazon cookies from the saved JSON file
- * Call this after browser launch to restore the session
+ * Restore Amazon cookies from the saved JSON file.
+ * Call this after browser launch to restore the session.
  */
-export async function restoreAmazonSession(page: Page): Promise<boolean> {
+export async function restoreAmazonSession(context: BrowserContext): Promise<boolean> {
   try {
     if (!fs.existsSync(COOKIES_FILE)) {
       console.log('ℹ No saved Amazon session found');
@@ -56,18 +49,17 @@ export async function restoreAmazonSession(page: Page): Promise<boolean> {
     }
 
     const cookiesData = fs.readFileSync(COOKIES_FILE, 'utf-8');
-    const cookies: SerializedCookie[] = JSON.parse(cookiesData);
+    const cookies: Cookie[] = JSON.parse(cookiesData);
 
-    // Filter out expired cookies
     const now = Date.now() / 1000;
-    const validCookies = cookies.filter(c => c.expires > now);
+    const validCookies = cookies.filter((c) => !c.expires || c.expires > now);
 
     if (validCookies.length === 0) {
       console.log('⚠️  All saved Amazon cookies have expired');
       return false;
     }
 
-    await page.setCookie(...validCookies);
+    await context.addCookies(validCookies);
     console.log(`✓ Restored ${validCookies.length} Amazon cookies from saved session`);
 
     if (validCookies.length < cookies.length) {
@@ -82,7 +74,7 @@ export async function restoreAmazonSession(page: Page): Promise<boolean> {
 }
 
 /**
- * Check if the user is currently logged in to Amazon
+ * Check if the user is currently logged in to Amazon (via DOM probe).
  */
 export async function isLoggedIn(page: Page): Promise<boolean> {
   try {

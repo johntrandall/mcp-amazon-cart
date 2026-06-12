@@ -9,8 +9,14 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
 import { searchProducts, addToCart, getCart, checkLoginStatus } from './amazon';
-import { searchWholeFoods, addToWholeFoodsCart, getWholeFoodsCart } from './wholefoods';
-import { closeBrowser, getBrowser, getPage } from './browser';
+import {
+  searchProductsBusiness,
+  addToCartBusiness,
+  getCartBusiness,
+  checkLoginStatusBusiness,
+} from './amazon-business';
+import { placeOrder } from './place-order';
+import { closeBrowser, getContext, getPage } from './browser';
 import { saveAmazonSession, restoreAmazonSession } from './session-manager';
 
 dotenv.config();
@@ -20,9 +26,10 @@ const AUTH_TOKEN = process.env.AUTH_TOKEN;
 
 // Tool definitions (single source of truth)
 const TOOLS = [
+  // ---- Personal Amazon (amazon.com / AMAZON_DOMAIN) ----
   {
     name: 'search_amazon',
-    description: 'Search for products on Amazon',
+    description: 'Search for products on personal Amazon (www.amazon.com)',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -33,7 +40,7 @@ const TOOLS = [
   },
   {
     name: 'add_to_cart',
-    description: 'Add a product to Amazon cart',
+    description: 'Add a product to the personal Amazon cart',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -45,45 +52,77 @@ const TOOLS = [
   },
   {
     name: 'view_cart',
-    description: 'View current Amazon cart contents',
+    description: 'View current personal Amazon cart contents',
     inputSchema: { type: 'object' as const, properties: {} },
   },
   {
     name: 'check_login',
-    description: 'Check if logged into Amazon',
+    description: 'Check if logged into personal Amazon',
     inputSchema: { type: 'object' as const, properties: {} },
   },
+
+  // ---- Business Amazon (business.amazon.com) ----
   {
-    name: 'save_session',
-    description: '(Optional) Manually trigger session save. Sessions are automatically saved periodically, after operations, and on shutdown, so this is typically not needed.',
-    inputSchema: { type: 'object' as const, properties: {} },
-  },
-  {
-    name: 'search_wholefoods',
-    description: 'Search for grocery products on Whole Foods Market via Amazon. Results are scoped to items available for Whole Foods delivery.',
+    name: 'search_amazon_business',
+    description: 'Search for products on Amazon Business (business.amazon.com)',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        query: { type: 'string', description: 'Search query for Whole Foods grocery products' },
+        query: { type: 'string', description: 'Search query for Amazon Business products' },
       },
       required: ['query'],
     },
   },
   {
-    name: 'add_to_wholefoods_cart',
-    description: 'Add a grocery product to the Whole Foods / Amazon Fresh cart. Use this instead of add_to_cart for grocery items.',
+    name: 'add_to_cart_business',
+    description: 'Add a product to the Amazon Business cart',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        query: { type: 'string', description: 'Product name to search and add from Whole Foods' },
-        asin: { type: 'string', description: 'Amazon ASIN (product ID) - use this if known from a previous search' },
+        query: { type: 'string', description: 'Product name to search and add' },
+        asin: { type: 'string', description: 'Amazon ASIN (product ID) - use this if known' },
         quantity: { type: 'number', description: 'Quantity to add (default: 1)', default: 1 },
       },
     },
   },
   {
-    name: 'view_wholefoods_cart',
-    description: 'View the current Whole Foods / Amazon Fresh grocery cart contents and subtotal.',
+    name: 'view_cart_business',
+    description: 'View current Amazon Business cart contents',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'check_login_business',
+    description: 'Check if logged into Amazon Business',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+
+  // ---- Order placement (both accounts) ----
+  {
+    name: 'place_order',
+    description:
+      'Place the current cart as an order. REQUIRES Pushover ACK from the user before finalizing. Returns order ID on success.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account: {
+          type: 'string',
+          enum: ['personal', 'business'],
+          description: 'Which Amazon account',
+        },
+        confirm_total_max_usd: {
+          type: 'number',
+          description: 'Hard cap — abort if cart total exceeds this',
+        },
+      },
+      required: ['account', 'confirm_total_max_usd'],
+    },
+  },
+
+  // ---- Session lifecycle ----
+  {
+    name: 'save_session',
+    description:
+      '(Optional) Manually trigger session save. Sessions are automatically saved periodically, after operations, and on shutdown, so this is typically not needed.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
 ];
@@ -91,7 +130,7 @@ const TOOLS = [
 // Create a new MCP server instance with handlers
 function createMcpServer(): Server {
   const server = new Server(
-    { name: 'amazon-cart-server', version: '1.0.0' },
+    { name: 'amazon-cart-server', version: '2.0.0' },
     { capabilities: { tools: {} } },
   );
 
@@ -106,6 +145,7 @@ function createMcpServer(): Server {
       let result;
 
       switch (name) {
+        // Personal
         case 'search_amazon':
           result = await searchProducts((args as any)?.query);
           break;
@@ -118,24 +158,38 @@ function createMcpServer(): Server {
         case 'check_login':
           result = await checkLoginStatus();
           break;
+
+        // Business
+        case 'search_amazon_business':
+          result = await searchProductsBusiness((args as any)?.query);
+          break;
+        case 'add_to_cart_business':
+          result = await addToCartBusiness(args as any);
+          break;
+        case 'view_cart_business':
+          result = await getCartBusiness();
+          break;
+        case 'check_login_business':
+          result = await checkLoginStatusBusiness();
+          break;
+
+        // Order placement
+        case 'place_order':
+          result = await placeOrder(args as any);
+          break;
+
+        // Session
         case 'save_session': {
-          const page = await getPage();
-          await saveAmazonSession(page);
+          const context = await getContext();
+          await saveAmazonSession(context);
           result = {
             success: true,
-            message: 'Amazon session saved successfully. Your login will persist across server restarts.',
+            message:
+              'Amazon session saved successfully. Your login will persist across server restarts.',
           };
           break;
         }
-        case 'search_wholefoods':
-          result = await searchWholeFoods((args as any)?.query);
-          break;
-        case 'add_to_wholefoods_cart':
-          result = await addToWholeFoodsCart(args as any);
-          break;
-        case 'view_wholefoods_cart':
-          result = await getWholeFoodsCart();
-          break;
+
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -145,10 +199,19 @@ function createMcpServer(): Server {
       };
     } catch (error) {
       return {
-        content: [{ type: 'text', text: JSON.stringify({
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        }, null, 2) }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              null,
+              2,
+            ),
+          },
+        ],
         isError: true,
       };
     }
@@ -263,12 +326,12 @@ app.listen(PORT, async () => {
 
   console.log('\nInitializing browser...');
   try {
-    await getBrowser();
+    const context = await getContext();
     const page = await getPage();
     const AMAZON_DOMAIN = process.env.AMAZON_DOMAIN || 'amazon.com';
 
-    const restored = await restoreAmazonSession(page);
-    await page.goto(`https://www.${AMAZON_DOMAIN}`, { waitUntil: 'networkidle2' });
+    const restored = await restoreAmazonSession(context);
+    await page.goto(`https://www.${AMAZON_DOMAIN}`, { waitUntil: 'networkidle' });
 
     if (restored) {
       console.log('✓ Browser opened with restored session!');
@@ -279,8 +342,8 @@ app.listen(PORT, async () => {
 
     setInterval(async () => {
       try {
-        const currentPage = await getPage();
-        await saveAmazonSession(currentPage);
+        const currentContext = await getContext();
+        await saveAmazonSession(currentContext);
         console.log('✓ Session auto-saved');
       } catch (error) {
         console.error('Failed to auto-save session:', error);
@@ -296,8 +359,8 @@ process.on('SIGINT', async () => {
   console.log('\nShutting down...');
 
   try {
-    const page = await getPage();
-    await saveAmazonSession(page);
+    const context = await getContext();
+    await saveAmazonSession(context);
     console.log('✓ Session saved before shutdown');
   } catch (error) {
     console.error('Failed to save session before shutdown:', error);

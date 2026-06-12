@@ -1,7 +1,7 @@
 {
   "name": "amazon-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP server for Amazon cart automation",
+  "version": "2.0.0",
+  "description": "MCP server for John's Amazon carts (Personal + Business) via Patchright stealth automation",
   "author": "Diana <diana@madebydia.com> (https://madebydia.com)",
   "license": "MIT",
   "keywords": [
@@ -9,7 +9,8 @@
     "amazon",
     "cart",
     "automation",
-    "puppeteer",
+    "patchright",
+    "playwright",
     "shopping"
   ],
   "repository": {
@@ -24,15 +25,14 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "ts-node src/server.ts",
-    "tunnel": "ngrok http 3000"
+    "dev": "ts-node src/server.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "puppeteer": "^24.26.1"
+    "patchright": "^1.52.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.0",
