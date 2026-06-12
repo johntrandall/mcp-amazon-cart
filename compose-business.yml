@@ -33,7 +33,7 @@ services:
       # AMAZON_DOMAIN to switch the BASE_URL between consumer and B2B.
       AMAZON_DOMAIN: business.amazon.com
       USER_DATA_DIR: /data/user-data
-      HEADLESS: "true"
+      HEADLESS: ${HEADLESS:-true}
       MCP_HTTP_PORT: "3000"
       DISPLAY: ":99"
       DISPLAY_NUM: "99"
