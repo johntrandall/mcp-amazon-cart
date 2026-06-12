@@ -1,0 +1,40 @@
+# Source for the build context. Mirrors .gitignore for files we never
+# want baked into the image, plus extras that .gitignore doesn't cover
+# (the build relies on tsc compile from src/, so node_modules and dist/
+# are rebuilt fresh each time).
+
+.git
+.gitignore
+.dockerignore
+.env
+.env.*
+*.env
+*.md
+!README.md
+
+node_modules
+dist
+build
+*.tsbuildinfo
+
+# Persistent browser profile — NEVER goes into the image. Mounted via
+# named volume at runtime.
+user-data
+*.crx
+*.pem
+
+# Editor / OS noise.
+.DS_Store
+.vscode
+.idea
+*.swp
+
+# Logs + coverage from local dev.
+*.log
+coverage
+.nyc_output
+
+# Compose files are not part of the build context (Portainer reads them
+# at stack creation, not docker build).
+compose-personal.yml
+compose-business.yml

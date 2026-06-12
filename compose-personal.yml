@@ -1,0 +1,93 @@
+# mcp-amazon-cart-personal — Portainer stack
+#
+# Dedicated container for John's PERSONAL Amazon account. The matching
+# business stack lives in compose-business.yml; they share the same image
+# build but DIFFERENT persistent named volumes so the Chrome profiles
+# (cookies, login session, address book) don't cross-contaminate.
+#
+# Ports (corrected 2026-06-12 — original briefing said 8935/5935 but
+# 8935 = browser-p0-unbrowser and 8936 = chase-mcp-onprem are already
+# in use per inventories/MCP-Server-Inventory.md). Personal stack takes
+# 8937 (HTTP) + 5937 (VNC); business stack takes 8938 + 5938.
+#
+# Pattern source: ~/dev/browser-pool-stealth-patchright/docker-compose.yml
+# (web-p1s-stealth-pool). Adaptations vs P1s:
+#   - Build context lives in this repo (P1s has its own).
+#   - Per-stack named volume for the Amazon profile (P1s has one shared volume).
+#   - Adds VNC port-mapping + VNC_PASSWORD env (P1s has no VNC layer).
+#   - mem_limit raised to 3g + NODE_OPTIONS=2048 per P1s OOM lesson
+#     (Verified 2026-05-25 / 2026-05-27 — see SKILL.md).
+#   - HEADLESS defaults to "true"; flip to "false" temporarily for the
+#     first-run VNC bootstrap (then redeploy with "true" for normal ops).
+#
+# Tailscale exposure: bare port mapping `8937:3000` defaults to all
+# interfaces (matches every other Synology stack in setup/synology/*).
+# Tailscale ACL is the perimeter; bearer token (AUTH_TOKEN) is the
+# inner gate. See conventions/host-routing-address-policy.md and
+# ADR-086 for the tailnet-exposure framing.
+
+services:
+  mcp-amazon-cart-personal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-amazon-cart:local
+    container_name: mcp-amazon-cart-personal
+    restart: unless-stopped
+
+    # 3 GiB = node V8 heap cap (2 GiB, see Dockerfile NODE_OPTIONS) +
+    # Chrome RSS (~600 MiB steady-state, single tab) + Xvfb + x11vnc +
+    # headroom. P1s previously ran at 1536m and V8 aborted with
+    # "Ineffective mark-compacts near heap limit" at ~750 MiB
+    # (Verified 2026-05-25). Do not lower without re-verifying.
+    mem_limit: 3g
+    cpu_shares: 1024
+
+    # Chrome needs /dev/shm > 64 MB or it crashes on complex pages.
+    shm_size: 2gb
+
+    ports:
+      # MCP HTTP — host:container, bare = all interfaces.
+      # Tailnet clients hit umbridge:8937; bearer token is the inner gate.
+      - "8937:3000"
+      # VNC — host:container, bare = all interfaces. Tailscale ACL
+      # is the only network gate; VNC_PASSWORD is the inner gate.
+      - "5937:5900"
+
+    environment:
+      AMAZON_DOMAIN: amazon.com
+      USER_DATA_DIR: /data/user-data
+      # First-run bootstrap: flip HEADLESS=false here, redeploy, VNC in,
+      # log in to Amazon, close window, flip HEADLESS=true, redeploy.
+      HEADLESS: "true"
+      MCP_HTTP_PORT: "3000"
+      DISPLAY: ":99"
+      DISPLAY_NUM: "99"
+      VNC_PORT: "5900"
+      # Bearer for Express MCP transport (madebydia's auth pattern).
+      AUTH_TOKEN: ${AUTH_TOKEN}
+      # x11vnc password — staged at runtime into /root/.vnc/passwd by
+      # entrypoint.sh. Empty value disables x11vnc (entrypoint refuses
+      # to start it unauthenticated).
+      VNC_PASSWORD: ${VNC_PASSWORD}
+      # Pushover gate for place_order (autonomous-shopping skill).
+      PUSHOVER_APP_TOKEN: ${PUSHOVER_APP_TOKEN}
+      PUSHOVER_USER_KEY: ${PUSHOVER_USER_KEY}
+      TZ: "America/New_York"
+
+    volumes:
+      # Persistent Amazon Personal Chrome profile. Survives container
+      # restarts so John's Amazon login persists across redeploys.
+      - mcp-amazon-cart-personal_user-data:/data/user-data
+
+    # DNS — let the container resolve Tailscale + LAN hostnames.
+    # Matches P1s convention.
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
+
+    # Healthcheck is defined in the Dockerfile (HEALTHCHECK directive).
+
+volumes:
+  mcp-amazon-cart-personal_user-data:
+    name: mcp-amazon-cart-personal_user-data
