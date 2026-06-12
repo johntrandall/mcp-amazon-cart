@@ -1,19 +1,22 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
+import { chromium, BrowserContext, Page } from 'patchright';
 import path from 'path';
 
-let browserInstance: Browser | null = null;
+let contextInstance: BrowserContext | null = null;
 
-export async function getBrowser(): Promise<Browser> {
-  if (browserInstance && browserInstance.connected) {
-    return browserInstance;
-  }
-
-  // Clean up stale reference if browser disconnected
-  if (browserInstance && !browserInstance.connected) {
-    console.log('Browser disconnected, cleaning up before relaunch...');
-    browserInstance = null;
-    // Give Chrome a moment to release the lock file
-    await new Promise(resolve => setTimeout(resolve, 1000));
+/**
+ * Get or create the persistent Patchright browser context.
+ *
+ * Patchright is a drop-in for Playwright with built-in stealth patches —
+ * the browser-fingerprint anti-detection that the legacy Puppeteer factory
+ * applied manually (webdriver, plugins, languages overrides) is handled by
+ * patchright internally.
+ *
+ * channel: 'chrome' uses real Google Chrome (not Chromium) because Amazon's
+ * bot detection is more lenient with the real Chrome user agent + binary.
+ */
+export async function getContext(): Promise<BrowserContext> {
+  if (contextInstance) {
+    return contextInstance;
   }
 
   const userDataDir = path.resolve(process.env.USER_DATA_DIR || './user-data');
@@ -22,147 +25,80 @@ export async function getBrowser(): Promise<Browser> {
   console.log('Launching browser with config:', {
     headless,
     userDataDir,
+    channel: 'chrome',
   });
 
   try {
-    browserInstance = await puppeteer.launch({
-    headless,
-    userDataDir,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--flag-switches-begin --disable-site-isolation-trials --flag-switches-end',
-    ],
-    ignoreDefaultArgs: ['--enable-automation'],
-    defaultViewport: {
-      width: 1280,
-      height: 800,
-    },
-  });
+    contextInstance = await chromium.launchPersistentContext(userDataDir, {
+      channel: 'chrome',
+      headless,
+      viewport: { width: 1366, height: 900 },
+      // Patchright already handles AutomationControlled; keep the flag for belt-and-suspenders.
+      args: ['--disable-blink-features=AutomationControlled'],
+      // x11vnc bootstrap path: when HEADLESS=false in the container, Xvfb is on :99
+      // and the launched Chrome reads $DISPLAY from the env automatically.
+    });
 
-  // Set additional properties to avoid detection and check for existing cookies
-  {
-    const pages = await browserInstance.pages();
-    if (pages.length > 0) {
-      const page = pages[0];
-      await page.evaluateOnNewDocument(() => {
-        // Remove webdriver property
-        Object.defineProperty(navigator, 'webdriver', {
-          get: () => undefined,
-        });
+    // Inspect existing cookies for logging only — useful first-boot signal.
+    const cookies = await contextInstance.cookies('https://www.amazon.com');
+    console.log('✓ Browser launched successfully');
+    console.log('✓ User data dir:', userDataDir);
+    console.log(`✓ Loaded ${cookies.length} existing Amazon cookies from profile`);
 
-        // Mock plugins and languages
-        Object.defineProperty(navigator, 'plugins', {
-          get: () => [1, 2, 3, 4, 5],
-        });
-
-        Object.defineProperty(navigator, 'languages', {
-          get: () => ['en-US', 'en'],
-        });
-      });
-
-      // Check if we have existing Amazon cookies
-      const client = await page.target().createCDPSession();
-      const { cookies } = await client.send('Network.getCookies', {
-        urls: ['https://www.amazon.com'],
-      });
-      await client.detach();
-
-      console.log('✓ Browser launched successfully');
-      console.log('✓ User data dir:', userDataDir);
-      console.log(`✓ Loaded ${cookies.length} existing Amazon cookies from profile`);
-
-      // Check for session cookies
-      const hasSessionCookies = cookies.some((c: any) => c.name === 'session-id' || c.name === 'session-token');
-      if (hasSessionCookies) {
-        console.log('✓ Found Amazon session cookies - you may already be logged in');
-      } else {
-        console.log('ℹ No Amazon session cookies found - you will need to log in');
-      }
+    const hasSessionCookies = cookies.some((c) => c.name === 'session-id' || c.name === 'session-token');
+    if (hasSessionCookies) {
+      console.log('✓ Found Amazon session cookies - you may already be logged in');
     } else {
-      console.log('✓ Browser launched successfully');
-      console.log('✓ User data dir:', userDataDir);
+      console.log('ℹ No Amazon session cookies found - you will need to log in');
     }
-  }
 
-    return browserInstance;
+    return contextInstance;
   } catch (error) {
     console.error('Failed to launch browser:', error);
     if (error instanceof Error && error.message.includes('already running')) {
       console.error('\n⚠️  Another browser instance is using the user data directory.');
-      console.error('   Please close any other instances or use a different USER_DATA_DIR.');
-      console.error('   You can kill the process with: lsof -ti:3001 | xargs kill -9\n');
+      console.error('   Please close any other instances or use a different USER_DATA_DIR.\n');
     }
     throw error;
   }
 }
 
+/**
+ * Get the active page from the persistent context. Reuses the first page
+ * if one already exists (typical: the persistent context restores the
+ * about:blank page from the prior session), otherwise creates a new one.
+ */
 export async function getPage(): Promise<Page> {
-  const browser = await getBrowser();
-  const pages = await browser.pages();
-
-  let page: Page;
+  const context = await getContext();
+  const pages = context.pages();
   if (pages.length > 0) {
-    page = pages[0];
-  } else {
-    page = await browser.newPage();
+    return pages[0];
   }
-
-  // Apply anti-detection measures to the page
-  await page.evaluateOnNewDocument(() => {
-    // Remove webdriver property
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => undefined,
-    });
-
-    // Mock plugins and languages
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5],
-    });
-
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en'],
-    });
-  });
-
-  return page;
+  return await context.newPage();
 }
 
 export async function closeBrowser(): Promise<void> {
-  if (browserInstance) {
+  if (contextInstance) {
     console.log('\nClosing browser and saving session data...');
 
     try {
-      // Get all pages and inspect cookies before closing
-      const pages = await browserInstance.pages();
-      if (pages.length > 0) {
-        const page = pages[0];
+      const cookies = await contextInstance.cookies();
+      console.log(`Saving ${cookies.length} total cookies`);
 
-        // Use CDP to get cookies (non-deprecated API)
-        const client = await page.target().createCDPSession();
-        const { cookies } = await client.send('Network.getAllCookies');
-        await client.detach();
+      const amazonCookies = cookies.filter((c) => c.domain.includes('amazon'));
+      console.log(`Amazon cookies: ${amazonCookies.length}`);
 
-        console.log(`Saving ${cookies.length} total cookies`);
-
-        // Log Amazon session cookies
-        const amazonCookies = cookies.filter((c: any) => c.domain.includes('amazon'));
-        console.log(`Amazon cookies: ${amazonCookies.length}`);
-
-        const sessionCookies = amazonCookies.filter((c: any) => !c.expires || c.expires === -1);
-        if (sessionCookies.length > 0) {
-          console.log(`⚠️  Warning: ${sessionCookies.length} session-only Amazon cookies will be lost on browser close`);
-          console.log('Session cookies:', sessionCookies.map((c: any) => c.name).join(', '));
-        }
+      const sessionCookies = amazonCookies.filter((c) => !c.expires || c.expires === -1);
+      if (sessionCookies.length > 0) {
+        console.log(`⚠️  Warning: ${sessionCookies.length} session-only Amazon cookies will be lost on browser close`);
+        console.log('Session cookies:', sessionCookies.map((c) => c.name).join(', '));
       }
     } catch (error) {
       console.error('Error while inspecting cookies:', error);
     }
 
-    await browserInstance.close();
-    browserInstance = null;
+    await contextInstance.close();
+    contextInstance = null;
     console.log('✓ Browser closed, session data saved to user-data directory');
   }
 }
