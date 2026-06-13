@@ -20,14 +20,14 @@ export async function searchProducts(query: string): Promise<OperationResult> {
     const page = await getPage();
     const context = await getContext();
 
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    // Navigate directly to the search results URL. Skipping the homepage +
+    // search-input + submit click sequence removes three failure points
+    // (#twotabsearchtextbox missing, the submit button absent, network never
+    // settling) and works identically on consumer Amazon.
+    const url = `${BASE_URL}/s?k=${encodeURIComponent(query)}`;
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    // Search for product
-    await page.waitForSelector('#twotabsearchtextbox');
-    await page.fill('#twotabsearchtextbox', query);
-    await page.click('#nav-search-submit-button');
-
-    await page.waitForSelector('[data-component-type="s-search-result"]');
+    await page.waitForSelector('[data-component-type="s-search-result"]', { timeout: 30000 });
 
     // Extract search results
     const results = await page.evaluate(() => {

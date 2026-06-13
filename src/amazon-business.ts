@@ -75,25 +75,14 @@ export async function searchProductsBusiness(query: string): Promise<OperationRe
     const page = await getPage();
     const context = await getContext();
 
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    // Skip the homepage entirely. business.amazon.com uses the Polaris design
+    // system with a collapsed/hidden search bar that needs JS hydration before
+    // it becomes interactable. Navigating directly to /s?k=query produces the
+    // same results page with no homepage handshake.
+    const url = `${BASE_URL}/s?k=${encodeURIComponent(query)}`;
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    const searchInput = await findFirstSelector(page, BUSINESS_SEARCH_INPUT_CANDIDATES);
-    if (!searchInput) {
-      throw new Error(
-        `No business search input found (tried ${BUSINESS_SEARCH_INPUT_CANDIDATES.length} candidates)`,
-      );
-    }
-    await page.fill(searchInput, query);
-
-    const submitBtn = await findFirstSelector(page, BUSINESS_SEARCH_SUBMIT_CANDIDATES, 2000);
-    if (submitBtn) {
-      await page.click(submitBtn);
-    } else {
-      // Fallback: press Enter on the input
-      await page.locator(searchInput).press('Enter');
-    }
-
-    await page.waitForSelector('[data-component-type="s-search-result"]');
+    await page.waitForSelector('[data-component-type="s-search-result"]', { timeout: 30000 });
 
     const results = await page.evaluate(() => {
       const items = Array.from(document.querySelectorAll('[data-component-type="s-search-result"]')) as Element[];
@@ -315,20 +304,35 @@ export async function checkLoginStatusBusiness(): Promise<OperationResult> {
         }
       }
 
-      // Strategy 2: DOM text-walk for "Hello" — the most resilient path
-      if (!accountText.includes('Hello')) {
+      // Strategy 2: DOM text-walk for "Hello" — the most resilient path.
+      // Amazon Business renders "Hello, $first_name$" as a JS-hydration
+      // placeholder before the real name appears; skip that variant and
+      // keep walking so the real hydrated text wins.
+      if (!accountText.includes('Hello') || /\$first_name\$/i.test(accountText)) {
         try {
           const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let firstHello: { text: string; sel: string } | null = null;
           while (walker.nextNode()) {
             const node = walker.currentNode as Text;
             const text = (node.textContent || '').trim();
             const m = text.match(/Hello[,\s][^\n]{1,150}/);
             if (m && node.parentElement) {
-              accountText = m[0].trim().slice(0, 200);
+              const matched = m[0].trim().slice(0, 200);
               const p = node.parentElement;
-              matchedSelector = `text-walk:${p.tagName.toLowerCase()}${p.id ? '#' + p.id : ''}`;
-              break;
+              const sel = `text-walk:${p.tagName.toLowerCase()}${p.id ? '#' + p.id : ''}`;
+              // Prefer the first non-placeholder hit
+              if (!/\$first_name\$/i.test(matched)) {
+                accountText = matched;
+                matchedSelector = sel;
+                break;
+              }
+              if (!firstHello) firstHello = { text: matched, sel };
             }
+          }
+          // If only the placeholder was found, fall back to it (still a logged-in signal)
+          if (!accountText.includes('Hello') && firstHello) {
+            accountText = firstHello.text;
+            matchedSelector = firstHello.sel + ':placeholder';
           }
         } catch {
           // walker errored — fall through
