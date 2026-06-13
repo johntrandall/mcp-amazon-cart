@@ -255,17 +255,24 @@ export async function removeFromCart(params: RemoveFromCartParams): Promise<Oper
 
     await deleteBtn.click();
 
-    // Wait for the row to disappear OR the "Item removed" message to appear.
-    // The cart re-renders the row as a "removed" stub with the Delete handler
-    // detached, so a count==0 check on the original row selector is reliable.
+    // Wait for the row to disappear. Amazon briefly reflows the row into a
+    // "removed" stub (same data-asin attribute, "Item removed" + "Move to
+    // saved for later" UI) before unmounting — polling the row selector
+    // sees the stub for ~1-2s after the click. Authoritative check: ask
+    // the server which items are in the cart via getCart() and confirm
+    // the ASIN is absent.
     let removed = false;
     for (let i = 0; i < 20; i++) {
-      const stillThere = await page.locator(rowSelector).count();
-      if (stillThere === 0) {
+      await new Promise((r) => setTimeout(r, 250));
+      const cartCheck = await getCart();
+      const stillPresent =
+        cartCheck.success &&
+        Array.isArray(cartCheck.data?.items) &&
+        cartCheck.data.items.some((it: any) => it?.asin === params.asin);
+      if (!stillPresent) {
         removed = true;
         break;
       }
-      await new Promise((r) => setTimeout(r, 250));
     }
 
     await saveAmazonSession(context).catch(() => {});
@@ -274,7 +281,7 @@ export async function removeFromCart(params: RemoveFromCartParams): Promise<Oper
       success: true,
       message: removed
         ? `Removed ASIN ${params.asin} from cart`
-        : `Clicked Delete for ASIN ${params.asin}, but row still present after 5s — Amazon may have moved it to "Saved for later" instead of deleting`,
+        : `Clicked Delete for ASIN ${params.asin}, but item still appears in cart after 5s — Amazon may have moved it to "Saved for later" instead of deleting`,
       data: { asin: params.asin, confirmedRemoved: removed },
     };
   } catch (error) {

@@ -307,14 +307,21 @@ export async function removeFromCartBusiness(params: RemoveFromCartParams): Prom
 
     await deleteBtn.click();
 
+    // Same authoritative check as Personal: poll getCartBusiness() and
+    // confirm the ASIN no longer appears in items. The row-count poll
+    // false-positives on the "removed" stub Amazon briefly renders.
     let removed = false;
     for (let i = 0; i < 20; i++) {
-      const stillThere = await page.locator(rowSelector).count();
-      if (stillThere === 0) {
+      await new Promise((r) => setTimeout(r, 250));
+      const cartCheck = await getCartBusiness();
+      const stillPresent =
+        cartCheck.success &&
+        Array.isArray(cartCheck.data?.items) &&
+        cartCheck.data.items.some((it: any) => it?.asin === params.asin);
+      if (!stillPresent) {
         removed = true;
         break;
       }
-      await new Promise((r) => setTimeout(r, 250));
     }
 
     await saveAmazonSession(context).catch(() => {});
@@ -323,7 +330,7 @@ export async function removeFromCartBusiness(params: RemoveFromCartParams): Prom
       success: true,
       message: removed
         ? `Removed ASIN ${params.asin} from Business cart`
-        : `Clicked Delete for ASIN ${params.asin}, but row still present after 5s`,
+        : `Clicked Delete for ASIN ${params.asin}, but item still appears in Business cart after 5s`,
       data: { asin: params.asin, confirmedRemoved: removed },
     };
   } catch (error) {
