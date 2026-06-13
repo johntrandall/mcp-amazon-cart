@@ -175,6 +175,16 @@ trap shutdown INT TERM
 # Track 3's compiled output lives at /app/dist/server.js (matches
 # madebydia upstream main: dist/server.js).
 # ─────────────────────────────────────────────────────────────────────
+# Clean stale Chrome SingletonLock/Cookie/Socket symlinks. These point to
+# PID+hostname pairs from a previous container; Patchright sees them and
+# refuses to launchPersistentContext with "Opening in existing browser session".
+# Verified 2026-06-12 — survived container restart because /data/user-data is
+# a persistent named volume.
+if [ -n "${USER_DATA_DIR:-}" ] && [ -d "$USER_DATA_DIR" ]; then
+  rm -f "$USER_DATA_DIR"/Singleton{Lock,Cookie,Socket} 2>/dev/null || true
+  echo "[entrypoint] cleared stale Chrome Singleton* symlinks from $USER_DATA_DIR" >&2
+fi
+
 echo "[entrypoint] launching MCP server: node /app/dist/server.js" >&2
 echo "[entrypoint]   PORT=${MCP_HTTP_PORT}  DISPLAY=:${DISPLAY_NUM}  HEADLESS=${HEADLESS:-true}" >&2
 echo "[entrypoint]   USER_DATA_DIR=${USER_DATA_DIR}" >&2
