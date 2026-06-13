@@ -2,10 +2,19 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 import path from 'path';
 
 let browserInstance: Browser | null = null;
+let browserInflight: Promise<Browser> | null = null;
 
 export async function getBrowser(): Promise<Browser> {
   if (browserInstance && browserInstance.connected) {
     return browserInstance;
+  }
+  // In-flight dedup. server.ts launches the browser in the app.listen
+  // callback in parallel with the first incoming tools/call. Without this
+  // guard, two puppeteer.launch invocations race on the same userDataDir
+  // and the second one bails with "Opening in existing browser session" —
+  // leaving browserInstance stuck null forever.
+  if (browserInflight) {
+    return browserInflight;
   }
 
   // Clean up stale reference if browser disconnected
@@ -24,7 +33,11 @@ export async function getBrowser(): Promise<Browser> {
     userDataDir,
   });
 
-  try {
+  browserInflight = (async () => {
+    // Yield once so any same-tick callers see browserInflight set before
+    // we await the launch.
+    await Promise.resolve();
+    try {
     browserInstance = await puppeteer.launch({
     headless,
     userDataDir,
@@ -88,15 +101,19 @@ export async function getBrowser(): Promise<Browser> {
   }
 
     return browserInstance;
-  } catch (error) {
-    console.error('Failed to launch browser:', error);
-    if (error instanceof Error && error.message.includes('already running')) {
-      console.error('\n⚠️  Another browser instance is using the user data directory.');
-      console.error('   Please close any other instances or use a different USER_DATA_DIR.');
-      console.error('   You can kill the process with: lsof -ti:3001 | xargs kill -9\n');
+    } catch (error) {
+      console.error('Failed to launch browser:', error);
+      if (error instanceof Error && error.message.includes('already running')) {
+        console.error('\n⚠️  Another browser instance is using the user data directory.');
+        console.error('   Please close any other instances or use a different USER_DATA_DIR.');
+        console.error('   You can kill the process with: lsof -ti:3001 | xargs kill -9\n');
+      }
+      throw error;
+    } finally {
+      browserInflight = null;
     }
-    throw error;
-  }
+  })();
+  return browserInflight;
 }
 
 export async function getPage(): Promise<Page> {
@@ -163,6 +180,7 @@ export async function closeBrowser(): Promise<void> {
 
     await browserInstance.close();
     browserInstance = null;
+    browserInflight = null;
     console.log('✓ Browser closed, session data saved to user-data directory');
   }
 }
