@@ -350,6 +350,22 @@ export async function checkLoginStatusBusiness(): Promise<OperationResult> {
     // NOT the shopping URL.
     await page.goto(HOMEPAGE_URL, { waitUntil: 'domcontentloaded' });
 
+    // Wait briefly for JS hydration to replace the "Hello, $first_name$"
+    // placeholder Amazon Business ships in the initial HTML. If hydration
+    // completes within 5s we get the real name; if it times out we fall
+    // through and the text-walk strategies below will detect the placeholder.
+    await page
+      .waitForFunction(
+        () => {
+          const t = document.body?.textContent || '';
+          return !t.includes('$first_name$') && /Hello[,\s]/.test(t);
+        },
+        { timeout: 5000 },
+      )
+      .catch(() => {
+        // hydration didn't complete — proceed with whatever's in the DOM
+      });
+
     const loginInfo = await page.evaluate(() => {
       // Strategy 1: known candidate selectors (consumer + business variants)
       const candidates = [
