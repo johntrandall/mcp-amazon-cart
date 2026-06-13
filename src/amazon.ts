@@ -73,22 +73,30 @@ export async function addToCart(params: AddToCartParams): Promise<OperationResul
     const page = await getPage();
     const quantity = params.quantity || 1;
 
-    // Navigate to product page
-    if (params.asin) {
-      await page.goto(`${BASE_URL}/dp/${params.asin}`, { waitUntil: 'networkidle2' });
-    } else if (params.query) {
-      // Search first, then click first result
-      await page.goto(BASE_URL, { waitUntil: 'networkidle2' });
-      await page.waitForSelector('#twotabsearchtextbox');
-      await page.type('#twotabsearchtextbox', params.query);
-      await page.click('#nav-search-submit-button');
-
-      await page.waitForSelector('[data-component-type="s-search-result"] h2 a');
-      await page.click('[data-component-type="s-search-result"] h2 a');
-      await page.waitForNavigation({ waitUntil: 'networkidle2' });
-    } else {
-      throw new Error('Either query or asin must be provided');
+    // Resolve ASIN. The previous "search then click [data-component-type=
+    // s-search-result] h2 a" path is brittle: Amazon moves the h2-wrapping
+    // anchor structure under search results often. Instead, reuse the same
+    // search extractor that already works and pick the first data-asin off
+    // the results, then navigate directly to /dp/{asin}.
+    let resolvedAsin = params.asin;
+    if (!resolvedAsin) {
+      if (!params.query) {
+        throw new Error('Either query or asin must be provided');
+      }
+      const search = await searchProducts(params.query);
+      if (!search.success || !Array.isArray(search.data) || search.data.length === 0) {
+        throw new Error(`Search returned no results for "${params.query}"`);
+      }
+      const firstAsin = (search.data as SearchResult[])
+        .map((r) => r.asin)
+        .find((a) => a && a.length > 0);
+      if (!firstAsin) {
+        throw new Error(`Search results had no usable ASIN for "${params.query}"`);
+      }
+      resolvedAsin = firstAsin;
     }
+
+    await page.goto(`${BASE_URL}/dp/${resolvedAsin}`, { waitUntil: 'networkidle2' });
 
     // Get product title
     const title = await page.evaluate(() => {
@@ -104,10 +112,25 @@ export async function addToCart(params: AddToCartParams): Promise<OperationResul
       }
     }
 
-    // Click Add to Cart button
-    const addToCartButton = await page.$('#add-to-cart-button');
+    // Click Add to Cart button. Amazon ships several variants of this button
+    // across product-page layouts; try each candidate and click the first
+    // one that exists.
+    const addToCartCandidates = [
+      '#add-to-cart-button',
+      'input[name="submit.add-to-cart"]',
+      '#submit\\.add-to-cart',
+      'input#add-to-cart-button',
+      '[aria-labelledby*="add-to-cart"]',
+    ];
+    let addToCartButton = null;
+    for (const sel of addToCartCandidates) {
+      addToCartButton = await page.$(sel);
+      if (addToCartButton) break;
+    }
     if (!addToCartButton) {
-      throw new Error('Add to Cart button not found');
+      throw new Error(
+        `Add to Cart button not found (tried ${addToCartCandidates.length} candidates)`,
+      );
     }
 
     await addToCartButton.click();
