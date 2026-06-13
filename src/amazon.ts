@@ -20,7 +20,7 @@ export async function searchProducts(query: string): Promise<OperationResult> {
     const page = await getPage();
     const context = await getContext();
 
-    await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     // Search for product
     await page.waitForSelector('#twotabsearchtextbox');
@@ -76,25 +76,29 @@ export async function addToCart(params: AddToCartParams): Promise<OperationResul
     const context = await getContext();
     const quantity = params.quantity || 1;
 
-    // Navigate to product page
-    if (params.asin) {
-      await page.goto(`${BASE_URL}/dp/${params.asin}`, { waitUntil: 'networkidle' });
-    } else if (params.query) {
-      // Search first, then click first result
-      await page.goto(BASE_URL, { waitUntil: 'networkidle' });
-      await page.waitForSelector('#twotabsearchtextbox');
-      await page.fill('#twotabsearchtextbox', params.query);
-      await page.click('#nav-search-submit-button');
-
-      await page.waitForSelector('[data-component-type="s-search-result"] h2 a');
-      // Trigger nav and wait for the load event to settle.
-      await Promise.all([
-        page.waitForLoadState('networkidle'),
-        page.click('[data-component-type="s-search-result"] h2 a'),
-      ]);
-    } else {
-      throw new Error('Either query or asin must be provided');
+    // Resolve ASIN. The historical "search then click first result" path
+    // was brittle (Amazon moves the h2-a link selector frequently). Instead
+    // we use the same search extractor that already works, pull the first
+    // data-asin off the results page, and navigate directly to /dp/{asin}.
+    let resolvedAsin = params.asin;
+    if (!resolvedAsin) {
+      if (!params.query) {
+        throw new Error('Either query or asin must be provided');
+      }
+      const search = await searchProducts(params.query);
+      if (!search.success || !Array.isArray(search.data) || search.data.length === 0) {
+        throw new Error(`Search returned no results for "${params.query}"`);
+      }
+      const firstAsin = search.data
+        .map((r: any) => r?.asin)
+        .find((a: string | undefined) => a && a.length > 0);
+      if (!firstAsin) {
+        throw new Error(`Search results had no usable ASIN for "${params.query}"`);
+      }
+      resolvedAsin = firstAsin;
     }
+
+    await page.goto(`${BASE_URL}/dp/${resolvedAsin}`, { waitUntil: 'domcontentloaded' });
 
     // Get product title
     const title = await page.evaluate(() => {
@@ -110,13 +114,28 @@ export async function addToCart(params: AddToCartParams): Promise<OperationResul
       }
     }
 
-    // Click Add to Cart button
-    const addToCartButton = page.locator('#add-to-cart-button').first();
-    if ((await addToCartButton.count()) === 0) {
-      throw new Error('Add to Cart button not found');
+    // Click Add to Cart button. Amazon ships several variants; try each.
+    const addToCartCandidates = [
+      '#add-to-cart-button',
+      'input[name="submit.add-to-cart"]',
+      '#submit\\.add-to-cart',
+      'input#add-to-cart-button',
+      '[aria-labelledby*="add-to-cart"]',
+    ];
+    let clicked = false;
+    for (const sel of addToCartCandidates) {
+      const btn = page.locator(sel).first();
+      if ((await btn.count()) > 0) {
+        await btn.click();
+        clicked = true;
+        break;
+      }
     }
-
-    await addToCartButton.click();
+    if (!clicked) {
+      throw new Error(
+        `Add to Cart button not found (tried ${addToCartCandidates.length} candidates)`,
+      );
+    }
 
     // Wait for confirmation
     const confirmationExists = await waitForElement(
@@ -151,7 +170,7 @@ export async function getCart(): Promise<OperationResult> {
   try {
     const page = await getPage();
 
-    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'networkidle' });
+    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'domcontentloaded' });
 
     // Check if cart is empty
     const emptyCart = await page.locator('.sc-your-amazon-cart-is-empty').count();
@@ -209,7 +228,7 @@ export async function checkLoginStatus(): Promise<OperationResult> {
   try {
     const page = await getPage();
     const context = await getContext();
-    await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     const loginInfo = await page.evaluate(() => {
       const accountList = document.querySelector('#nav-link-accountList-nav-line-1');

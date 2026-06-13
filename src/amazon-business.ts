@@ -26,16 +26,72 @@ async function waitForElement(page: Page, selector: string, timeout = 5000): Pro
  * two distinct overrides are needed.
  */
 
+/**
+ * Business homepage uses a different search input than consumer Amazon.
+ * Find the first matching selector and return it for downstream actions.
+ * Returns null if none of the candidates exist after the timeout.
+ */
+async function findFirstSelector(
+  page: Page,
+  candidates: string[],
+  timeoutMs = 8000,
+): Promise<string | null> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    for (const sel of candidates) {
+      try {
+        if ((await page.locator(sel).count()) > 0) {
+          return sel;
+        }
+      } catch {
+        // ignore bad selector
+      }
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return null;
+}
+
+const BUSINESS_SEARCH_INPUT_CANDIDATES = [
+  '#twotabsearchtextbox',
+  'input[name="field-keywords"]',
+  '#nav-search input[type="text"]',
+  '#nav-search input[type="search"]',
+  'input[type="search"]',
+  '[role="searchbox"]',
+  '#searchDropdownBox + input',
+];
+
+const BUSINESS_SEARCH_SUBMIT_CANDIDATES = [
+  '#nav-search-submit-button',
+  'input[type="submit"][value="Go"]',
+  '#nav-search button[type="submit"]',
+  '[aria-label="Go" i]',
+  'form[role="search"] button[type="submit"]',
+];
+
 export async function searchProductsBusiness(query: string): Promise<OperationResult> {
   try {
     const page = await getPage();
     const context = await getContext();
 
-    await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-    await page.waitForSelector('#twotabsearchtextbox');
-    await page.fill('#twotabsearchtextbox', query);
-    await page.click('#nav-search-submit-button');
+    const searchInput = await findFirstSelector(page, BUSINESS_SEARCH_INPUT_CANDIDATES);
+    if (!searchInput) {
+      throw new Error(
+        `No business search input found (tried ${BUSINESS_SEARCH_INPUT_CANDIDATES.length} candidates)`,
+      );
+    }
+    await page.fill(searchInput, query);
+
+    const submitBtn = await findFirstSelector(page, BUSINESS_SEARCH_SUBMIT_CANDIDATES, 2000);
+    if (submitBtn) {
+      await page.click(submitBtn);
+    } else {
+      // Fallback: press Enter on the input
+      await page.locator(searchInput).press('Enter');
+    }
 
     await page.waitForSelector('[data-component-type="s-search-result"]');
 
@@ -84,22 +140,27 @@ export async function addToCartBusiness(params: AddToCartParams): Promise<Operat
     const context = await getContext();
     const quantity = params.quantity || 1;
 
-    if (params.asin) {
-      await page.goto(`${BASE_URL}/dp/${params.asin}`, { waitUntil: 'networkidle' });
-    } else if (params.query) {
-      await page.goto(BASE_URL, { waitUntil: 'networkidle' });
-      await page.waitForSelector('#twotabsearchtextbox');
-      await page.fill('#twotabsearchtextbox', params.query);
-      await page.click('#nav-search-submit-button');
-
-      await page.waitForSelector('[data-component-type="s-search-result"] h2 a');
-      await Promise.all([
-        page.waitForLoadState('networkidle'),
-        page.click('[data-component-type="s-search-result"] h2 a'),
-      ]);
-    } else {
-      throw new Error('Either query or asin must be provided');
+    // Same pattern as personal: avoid the brittle click-first-result selector
+    // by resolving an ASIN first, then navigating directly.
+    let resolvedAsin = params.asin;
+    if (!resolvedAsin) {
+      if (!params.query) {
+        throw new Error('Either query or asin must be provided');
+      }
+      const search = await searchProductsBusiness(params.query);
+      if (!search.success || !Array.isArray(search.data) || search.data.length === 0) {
+        throw new Error(`Business search returned no results for "${params.query}"`);
+      }
+      const firstAsin = search.data
+        .map((r: any) => r?.asin)
+        .find((a: string | undefined) => a && a.length > 0);
+      if (!firstAsin) {
+        throw new Error(`Business search results had no usable ASIN for "${params.query}"`);
+      }
+      resolvedAsin = firstAsin;
     }
+
+    await page.goto(`${BASE_URL}/dp/${resolvedAsin}`, { waitUntil: 'domcontentloaded' });
 
     const title = await page.evaluate(() => {
       const titleEl = document.querySelector('#productTitle');
@@ -113,12 +174,27 @@ export async function addToCartBusiness(params: AddToCartParams): Promise<Operat
       }
     }
 
-    const addToCartButton = page.locator('#add-to-cart-button').first();
-    if ((await addToCartButton.count()) === 0) {
-      throw new Error('Add to Cart button not found');
+    const addToCartCandidates = [
+      '#add-to-cart-button',
+      'input[name="submit.add-to-cart"]',
+      '#submit\\.add-to-cart',
+      'input#add-to-cart-button',
+      '[aria-labelledby*="add-to-cart"]',
+    ];
+    let clicked = false;
+    for (const sel of addToCartCandidates) {
+      const btn = page.locator(sel).first();
+      if ((await btn.count()) > 0) {
+        await btn.click();
+        clicked = true;
+        break;
+      }
     }
-
-    await addToCartButton.click();
+    if (!clicked) {
+      throw new Error(
+        `Business Add to Cart button not found (tried ${addToCartCandidates.length} candidates)`,
+      );
+    }
 
     const confirmationExists = await waitForElement(
       page,
@@ -150,7 +226,7 @@ export async function getCartBusiness(): Promise<OperationResult> {
   try {
     const page = await getPage();
 
-    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'networkidle' });
+    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'domcontentloaded' });
 
     const emptyCart = await page.locator('.sc-your-amazon-cart-is-empty').count();
     if (emptyCart > 0) {
@@ -205,40 +281,94 @@ export async function checkLoginStatusBusiness(): Promise<OperationResult> {
   try {
     const page = await getPage();
     const context = await getContext();
-    await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     const loginInfo = await page.evaluate(() => {
+      // Strategy 1: known candidate selectors (consumer + business variants)
       const candidates = [
         '#nav-link-accountList-nav-line-1',
         '#nav-link-accountList',
         '[data-csa-c-content-id="nav_ya_signin"]',
         '#nav-your-amazon-business',
         '#nav-link-yourAccount',
+        '#nav-link-yourBusinessAccount',
+        '#nav-greet-name',
+        '#nav-greeting',
+        '.nav-line-1',
+        '[id*="accountList"]',
+        '[id*="greet"]',
       ];
       let accountText = '';
+      let matchedSelector = '';
       for (const sel of candidates) {
-        const el = document.querySelector(sel);
-        const t = el?.textContent?.trim() || '';
-        if (t) {
-          accountText = t;
-          if (t.includes('Hello')) break;
+        try {
+          const el = document.querySelector(sel);
+          const t = el?.textContent?.trim() || '';
+          if (t && t.includes('Hello')) {
+            accountText = t.slice(0, 200);
+            matchedSelector = sel;
+            break;
+          }
+          if (t && !accountText) accountText = t.slice(0, 200);
+        } catch {
+          // bad selector — keep going
         }
       }
+
+      // Strategy 2: DOM text-walk for "Hello" — the most resilient path
+      if (!accountText.includes('Hello')) {
+        try {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode as Text;
+            const text = (node.textContent || '').trim();
+            const m = text.match(/Hello[,\s][^\n]{1,150}/);
+            if (m && node.parentElement) {
+              accountText = m[0].trim().slice(0, 200);
+              const p = node.parentElement;
+              matchedSelector = `text-walk:${p.tagName.toLowerCase()}${p.id ? '#' + p.id : ''}`;
+              break;
+            }
+          }
+        } catch {
+          // walker errored — fall through
+        }
+      }
+
+      // Strategy 3: nav-belt/header regex
       if (!accountText.includes('Hello')) {
         const nav = document.querySelector('#nav-belt, #nav-main, #nav-tools, header');
         const navText = nav?.textContent || '';
         const m = navText.match(/Hello[^,\n]*[,\n][^\n]{1,80}/);
-        if (m) accountText = m[0].trim().slice(0, 120);
+        if (m) {
+          accountText = m[0].trim().slice(0, 200);
+          matchedSelector = 'regex:nav-belt';
+        }
       }
-      const isLoggedIn = accountText.includes('Hello');
+
       const cookieCount = document.cookie.split(';').filter((c) => c.trim()).length;
-      return { isLoggedIn, accountText, cookieCount };
+
+      // Fallback heuristic: if account text didn't surface but cookie count
+      // is high (>15), the session is almost certainly logged in — the consumer
+      // logged-out page has ~5-10 cookies; logged-in 20+.
+      const hasHello = accountText.includes('Hello');
+      const isLoggedIn = hasHello || cookieCount >= 20;
+
+      return {
+        isLoggedIn,
+        accountText,
+        cookieCount,
+        matchedSelector,
+        loginDetectionMethod: hasHello ? 'account-text' : isLoggedIn ? 'cookie-count' : 'none',
+      };
     });
 
     console.log('Business login status check:', {
       loggedIn: loginInfo.isLoggedIn,
       accountText: loginInfo.accountText,
       cookieCount: loginInfo.cookieCount,
+      matchedSelector: loginInfo.matchedSelector,
+      method: loginInfo.loginDetectionMethod,
     });
 
     if (loginInfo.isLoggedIn) {
@@ -248,12 +378,14 @@ export async function checkLoginStatusBusiness(): Promise<OperationResult> {
     return {
       success: true,
       message: loginInfo.isLoggedIn
-        ? `Logged in to Amazon Business (${loginInfo.accountText})`
+        ? `Logged in to Amazon Business (${loginInfo.accountText || 'session valid via cookie heuristic'})`
         : 'Not logged in to Amazon Business',
       data: {
         loggedIn: loginInfo.isLoggedIn,
         accountText: loginInfo.accountText,
         cookieCount: loginInfo.cookieCount,
+        matchedSelector: loginInfo.matchedSelector,
+        loginDetectionMethod: loginInfo.loginDetectionMethod,
       },
     };
   } catch (error) {

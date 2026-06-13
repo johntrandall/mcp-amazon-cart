@@ -18,6 +18,7 @@ import {
 import { placeOrder } from './place-order';
 import { closeBrowser, getContext, getPage } from './browser';
 import { saveAmazonSession, restoreAmazonSession } from './session-manager';
+import { dumpDom, inspectSelectors, findText } from './debug';
 
 dotenv.config();
 
@@ -125,6 +126,54 @@ const TOOLS = [
       '(Optional) Manually trigger session save. Sessions are automatically saved periodically, after operations, and on shutdown, so this is typically not needed.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
+
+  // ---- Debug / selector discovery ----
+  // These tools let an out-of-container caller (e.g. a Claude session) inspect
+  // the live Amazon DOM in this container's Chrome without needing VNC.
+  // Behind bearer auth; safe to leave deployed.
+  {
+    name: 'debug_dump_dom',
+    description:
+      'Dump the HTML of the current page (or a given URL) for selector-debt diagnosis. Returns up to maxBytes (default 200KB) of HTML.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'Optional URL to navigate to first' },
+        maxBytes: { type: 'number', description: 'Truncate HTML to this many bytes (default 200000)' },
+      },
+    },
+  },
+  {
+    name: 'debug_inspect_selectors',
+    description:
+      'Test a list of CSS selectors against the current page and report match count, first element text/id/class/href for each.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'Optional URL to navigate to first' },
+        selectors: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'CSS selectors to inspect',
+        },
+      },
+      required: ['selectors'],
+    },
+  },
+  {
+    name: 'debug_find_text',
+    description:
+      'Search the entire DOM for elements whose text matches a regex. Returns up to 20 matches with DOM path, id, class, outer HTML.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'Optional URL to navigate to first' },
+        pattern: { type: 'string', description: 'JavaScript regex pattern (without delimiters)' },
+        flags: { type: 'string', description: 'Regex flags (default "i")' },
+      },
+      required: ['pattern'],
+    },
+  },
 ];
 
 // Create a new MCP server instance with handlers
@@ -189,6 +238,17 @@ function createMcpServer(): Server {
           };
           break;
         }
+
+        // Debug / selector discovery
+        case 'debug_dump_dom':
+          result = await dumpDom(args as any);
+          break;
+        case 'debug_inspect_selectors':
+          result = await inspectSelectors(args as any);
+          break;
+        case 'debug_find_text':
+          result = await findText(args as any);
+          break;
 
         default:
           throw new Error(`Unknown tool: ${name}`);
@@ -331,7 +391,7 @@ app.listen(PORT, async () => {
     const AMAZON_DOMAIN = process.env.AMAZON_DOMAIN || 'amazon.com';
 
     const restored = await restoreAmazonSession(context);
-    await page.goto(`https://www.${AMAZON_DOMAIN}`, { waitUntil: 'networkidle' });
+    await page.goto(`https://www.${AMAZON_DOMAIN}`, { waitUntil: 'domcontentloaded' });
 
     if (restored) {
       console.log('✓ Browser opened with restored session!');
