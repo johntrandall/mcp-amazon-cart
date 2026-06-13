@@ -3,9 +3,20 @@ import { getContext, getPage } from './browser';
 import { AddToCartParams, OperationResult } from './types';
 import { saveAmazonSession } from './session-manager';
 
-// Business Amazon has its own subdomain; same Amazon retail backend, but
-// b2b auth, pricing, and addresses route through it.
-const BASE_URL = 'https://business.amazon.com';
+// Amazon Business has TWO distinct surfaces and the original assumption that
+// they're one site is wrong:
+//   - business.amazon.com — Polaris AEM marketing/account site. The Hello
+//     greeting + account memberships live here. Paths like /s?k= and /dp/
+//     return 404.
+//   - www.amazon.com — the actual shopping app. When the browser carries the
+//     business-account cookies (.amazon.com scope), www serves B2B-flavored
+//     search results, B2B pricing on /dp/{asin}, and a B2B cart at
+//     /gp/cart/view.html. Verified via debug_dump_dom: business.amazon.com/s?k=
+//     returns Page-Not-Found, www.amazon.com/s?k= returns 26 results with
+//     "Business Essentials" + 27 elements carrying "business" classes.
+const HOMEPAGE_URL = 'https://business.amazon.com';
+const SHOPPING_URL = 'https://www.amazon.com';
+const BASE_URL = SHOPPING_URL; // kept for back-compat with existing imports
 
 async function waitForElement(page: Page, selector: string, timeout = 5000): Promise<boolean> {
   try {
@@ -270,7 +281,9 @@ export async function checkLoginStatusBusiness(): Promise<OperationResult> {
   try {
     const page = await getPage();
     const context = await getContext();
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    // Login check uses the Polaris homepage (where the account greeting lives),
+    // NOT the shopping URL.
+    await page.goto(HOMEPAGE_URL, { waitUntil: 'domcontentloaded' });
 
     const loginInfo = await page.evaluate(() => {
       // Strategy 1: known candidate selectors (consumer + business variants)
