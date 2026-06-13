@@ -19,7 +19,7 @@ export async function searchProducts(query: string): Promise<OperationResult> {
   try {
     const page = await getPage();
 
-    await page.goto(BASE_URL, { waitUntil: 'networkidle2' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     // Search for product
     await page.waitForSelector('#twotabsearchtextbox');
@@ -75,17 +75,17 @@ export async function addToCart(params: AddToCartParams): Promise<OperationResul
 
     // Navigate to product page
     if (params.asin) {
-      await page.goto(`${BASE_URL}/dp/${params.asin}`, { waitUntil: 'networkidle2' });
+      await page.goto(`${BASE_URL}/dp/${params.asin}`, { waitUntil: 'domcontentloaded' });
     } else if (params.query) {
       // Search first, then click first result
-      await page.goto(BASE_URL, { waitUntil: 'networkidle2' });
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('#twotabsearchtextbox');
       await page.type('#twotabsearchtextbox', params.query);
       await page.click('#nav-search-submit-button');
 
       await page.waitForSelector('[data-component-type="s-search-result"] h2 a');
       await page.click('[data-component-type="s-search-result"] h2 a');
-      await page.waitForNavigation({ waitUntil: 'networkidle2' });
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded' });
     } else {
       throw new Error('Either query or asin must be provided');
     }
@@ -141,7 +141,7 @@ export async function getCart(): Promise<OperationResult> {
   try {
     const page = await getPage();
 
-    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'networkidle2' });
+    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'domcontentloaded' });
 
     // Check if cart is empty
     const emptyCart = await page.$('.sc-your-amazon-cart-is-empty');
@@ -196,7 +196,7 @@ export async function getCart(): Promise<OperationResult> {
 export async function checkLoginStatus(): Promise<OperationResult> {
   try {
     const page = await getPage();
-    await page.goto(BASE_URL, { waitUntil: 'networkidle2' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     const loginInfo = await page.evaluate(() => {
       const accountList = document.querySelector('#nav-link-accountList-nav-line-1');

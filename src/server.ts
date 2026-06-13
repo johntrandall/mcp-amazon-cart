@@ -268,7 +268,7 @@ app.listen(PORT, async () => {
     const AMAZON_DOMAIN = process.env.AMAZON_DOMAIN || 'amazon.com';
 
     const restored = await restoreAmazonSession(page);
-    await page.goto(`https://www.${AMAZON_DOMAIN}`, { waitUntil: 'networkidle2' });
+    await page.goto(`https://www.${AMAZON_DOMAIN}`, { waitUntil: 'domcontentloaded' });
 
     if (restored) {
       console.log('✓ Browser opened with restored session!');
