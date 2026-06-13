@@ -2,6 +2,7 @@ import { chromium, BrowserContext, Page } from 'patchright';
 import path from 'path';
 
 let contextInstance: BrowserContext | null = null;
+let contextInflight: Promise<BrowserContext> | null = null;
 
 /**
  * Get or create the persistent Patchright browser context.
@@ -18,6 +19,15 @@ export async function getContext(): Promise<BrowserContext> {
   if (contextInstance) {
     return contextInstance;
   }
+  // In-flight dedup: when the app starts, server.ts's app.listen callback
+  // calls getContext() in parallel with the first tools/call. Without this
+  // guard, two chromium.launchPersistentContext invocations race on the same
+  // --user-data-dir and the second one bails with "Opening in existing
+  // browser session" — leaving contextInstance stuck null forever.
+  // Pattern lifted from feedback-authinflight-iife-race-needs-yield.
+  if (contextInflight) {
+    return contextInflight;
+  }
 
   const userDataDir = path.resolve(process.env.USER_DATA_DIR || './user-data');
   const headless = process.env.HEADLESS === 'true';
@@ -28,39 +38,50 @@ export async function getContext(): Promise<BrowserContext> {
     channel: 'chrome',
   });
 
-  try {
-    contextInstance = await chromium.launchPersistentContext(userDataDir, {
-      channel: 'chrome',
-      headless,
-      viewport: { width: 1366, height: 900 },
-      // Patchright already handles AutomationControlled; keep the flag for belt-and-suspenders.
-      args: ['--disable-blink-features=AutomationControlled'],
-      // x11vnc bootstrap path: when HEADLESS=false in the container, Xvfb is on :99
-      // and the launched Chrome reads $DISPLAY from the env automatically.
-    });
+  contextInflight = (async () => {
+    // Yield once so any same-tick callers see contextInflight set
+    // before we await the launch.
+    await Promise.resolve();
+    try {
+      const created = await chromium.launchPersistentContext(userDataDir, {
+        channel: 'chrome',
+        headless,
+        viewport: { width: 1366, height: 900 },
+        // Patchright already handles AutomationControlled; keep the flag for belt-and-suspenders.
+        args: ['--disable-blink-features=AutomationControlled'],
+        // x11vnc bootstrap path: when HEADLESS=false in the container, Xvfb is on :99
+        // and the launched Chrome reads $DISPLAY from the env automatically.
+      });
+      contextInstance = created;
 
-    // Inspect existing cookies for logging only — useful first-boot signal.
-    const cookies = await contextInstance.cookies('https://www.amazon.com');
-    console.log('✓ Browser launched successfully');
-    console.log('✓ User data dir:', userDataDir);
-    console.log(`✓ Loaded ${cookies.length} existing Amazon cookies from profile`);
+      // Inspect existing cookies for logging only — useful first-boot signal.
+      const cookies = await created.cookies('https://www.amazon.com');
+      console.log('✓ Browser launched successfully');
+      console.log('✓ User data dir:', userDataDir);
+      console.log(`✓ Loaded ${cookies.length} existing Amazon cookies from profile`);
 
-    const hasSessionCookies = cookies.some((c) => c.name === 'session-id' || c.name === 'session-token');
-    if (hasSessionCookies) {
-      console.log('✓ Found Amazon session cookies - you may already be logged in');
-    } else {
-      console.log('ℹ No Amazon session cookies found - you will need to log in');
+      const hasSessionCookies = cookies.some(
+        (c) => c.name === 'session-id' || c.name === 'session-token',
+      );
+      if (hasSessionCookies) {
+        console.log('✓ Found Amazon session cookies - you may already be logged in');
+      } else {
+        console.log('ℹ No Amazon session cookies found - you will need to log in');
+      }
+
+      return created;
+    } catch (error) {
+      console.error('Failed to launch browser:', error);
+      if (error instanceof Error && error.message.includes('already running')) {
+        console.error('\n⚠️  Another browser instance is using the user data directory.');
+        console.error('   Please close any other instances or use a different USER_DATA_DIR.\n');
+      }
+      throw error;
+    } finally {
+      contextInflight = null;
     }
-
-    return contextInstance;
-  } catch (error) {
-    console.error('Failed to launch browser:', error);
-    if (error instanceof Error && error.message.includes('already running')) {
-      console.error('\n⚠️  Another browser instance is using the user data directory.');
-      console.error('   Please close any other instances or use a different USER_DATA_DIR.\n');
-    }
-    throw error;
-  }
+  })();
+  return contextInflight;
 }
 
 /**
@@ -99,6 +120,7 @@ export async function closeBrowser(): Promise<void> {
 
     await contextInstance.close();
     contextInstance = null;
+    contextInflight = null;
     console.log('✓ Browser closed, session data saved to user-data directory');
   }
 }
