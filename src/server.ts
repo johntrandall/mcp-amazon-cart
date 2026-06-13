@@ -8,10 +8,11 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
-import { searchProducts, addToCart, getCart, checkLoginStatus } from './amazon';
+import { searchProducts, addToCart, removeFromCart, getCart, checkLoginStatus } from './amazon';
 import {
   searchProductsBusiness,
   addToCartBusiness,
+  removeFromCartBusiness,
   getCartBusiness,
   checkLoginStatusBusiness,
 } from './amazon-business';
@@ -57,6 +58,17 @@ const TOOLS = [
     inputSchema: { type: 'object' as const, properties: {} },
   },
   {
+    name: 'remove_from_cart',
+    description: 'Remove an item from the personal Amazon cart by ASIN',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        asin: { type: 'string', description: 'Amazon ASIN currently in the cart' },
+      },
+      required: ['asin'],
+    },
+  },
+  {
     name: 'check_login',
     description: 'Check if logged into personal Amazon',
     inputSchema: { type: 'object' as const, properties: {} },
@@ -90,6 +102,17 @@ const TOOLS = [
     name: 'view_cart_business',
     description: 'View current Amazon Business cart contents',
     inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'remove_from_cart_business',
+    description: 'Remove an item from the Amazon Business cart by ASIN',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        asin: { type: 'string', description: 'Amazon ASIN currently in the Business cart' },
+      },
+      required: ['asin'],
+    },
   },
   {
     name: 'check_login_business',
@@ -204,6 +227,9 @@ function createMcpServer(): Server {
         case 'view_cart':
           result = await getCart();
           break;
+        case 'remove_from_cart':
+          result = await removeFromCart(args as any);
+          break;
         case 'check_login':
           result = await checkLoginStatus();
           break;
@@ -217,6 +243,9 @@ function createMcpServer(): Server {
           break;
         case 'view_cart_business':
           result = await getCartBusiness();
+          break;
+        case 'remove_from_cart_business':
+          result = await removeFromCartBusiness(args as any);
           break;
         case 'check_login_business':
           result = await checkLoginStatusBusiness();

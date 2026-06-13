@@ -1,6 +1,6 @@
 import { Page } from 'patchright';
 import { getContext, getPage } from './browser';
-import { AddToCartParams, OperationResult } from './types';
+import { AddToCartParams, RemoveFromCartParams, OperationResult } from './types';
 import { saveAmazonSession } from './session-manager';
 
 const AMAZON_DOMAIN = process.env.AMAZON_DOMAIN || 'amazon.com';
@@ -219,6 +219,68 @@ export async function getCart(): Promise<OperationResult> {
     return {
       success: false,
       message: 'Failed to get cart contents',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function removeFromCart(params: RemoveFromCartParams): Promise<OperationResult> {
+  try {
+    const page = await getPage();
+    const context = await getContext();
+    if (!params.asin) {
+      throw new Error('asin is required');
+    }
+
+    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'domcontentloaded' });
+
+    // Scope the row by data-asin first; the Delete button is one per row,
+    // keyed by a per-row UUID embedded in its name attribute
+    // (submit.delete-active.{rowId}).
+    const rowSelector = `[data-name="Active Items"] [data-asin="${params.asin}"]`;
+    const rowExists = await waitForElement(page, rowSelector, 5000);
+    if (!rowExists) {
+      return {
+        success: false,
+        message: `ASIN ${params.asin} not found in cart (already removed?)`,
+      };
+    }
+
+    const deleteBtn = page
+      .locator(`${rowSelector} input[name^="submit.delete-active."]`)
+      .first();
+    if ((await deleteBtn.count()) === 0) {
+      throw new Error(`Delete button not found inside row for ASIN ${params.asin}`);
+    }
+
+    await deleteBtn.click();
+
+    // Wait for the row to disappear OR the "Item removed" message to appear.
+    // The cart re-renders the row as a "removed" stub with the Delete handler
+    // detached, so a count==0 check on the original row selector is reliable.
+    let removed = false;
+    for (let i = 0; i < 20; i++) {
+      const stillThere = await page.locator(rowSelector).count();
+      if (stillThere === 0) {
+        removed = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    await saveAmazonSession(context).catch(() => {});
+
+    return {
+      success: true,
+      message: removed
+        ? `Removed ASIN ${params.asin} from cart`
+        : `Clicked Delete for ASIN ${params.asin}, but row still present after 5s — Amazon may have moved it to "Saved for later" instead of deleting`,
+      data: { asin: params.asin, confirmedRemoved: removed },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: 'Failed to remove from cart',
       error: error instanceof Error ? error.message : String(error),
     };
   }

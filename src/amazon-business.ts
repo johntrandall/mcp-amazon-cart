@@ -1,6 +1,6 @@
 import { Page } from 'patchright';
 import { getContext, getPage } from './browser';
-import { AddToCartParams, OperationResult } from './types';
+import { AddToCartParams, RemoveFromCartParams, OperationResult } from './types';
 import { saveAmazonSession } from './session-manager';
 
 // Amazon Business has TWO distinct surfaces and the original assumption that
@@ -272,6 +272,64 @@ export async function getCartBusiness(): Promise<OperationResult> {
     return {
       success: false,
       message: 'Failed to get Business cart contents',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function removeFromCartBusiness(params: RemoveFromCartParams): Promise<OperationResult> {
+  try {
+    const page = await getPage();
+    const context = await getContext();
+    if (!params.asin) {
+      throw new Error('asin is required');
+    }
+
+    // Cart operations go to the shopping (www) surface — business.amazon.com
+    // /gp/cart/view.html does not host the cart UI.
+    await page.goto(`${BASE_URL}/gp/cart/view.html`, { waitUntil: 'domcontentloaded' });
+
+    const rowSelector = `[data-name="Active Items"] [data-asin="${params.asin}"]`;
+    const rowExists = await waitForElement(page, rowSelector, 5000);
+    if (!rowExists) {
+      return {
+        success: false,
+        message: `ASIN ${params.asin} not found in Business cart (already removed?)`,
+      };
+    }
+
+    const deleteBtn = page
+      .locator(`${rowSelector} input[name^="submit.delete-active."]`)
+      .first();
+    if ((await deleteBtn.count()) === 0) {
+      throw new Error(`Business Delete button not found inside row for ASIN ${params.asin}`);
+    }
+
+    await deleteBtn.click();
+
+    let removed = false;
+    for (let i = 0; i < 20; i++) {
+      const stillThere = await page.locator(rowSelector).count();
+      if (stillThere === 0) {
+        removed = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    await saveAmazonSession(context).catch(() => {});
+
+    return {
+      success: true,
+      message: removed
+        ? `Removed ASIN ${params.asin} from Business cart`
+        : `Clicked Delete for ASIN ${params.asin}, but row still present after 5s`,
+      data: { asin: params.asin, confirmedRemoved: removed },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: 'Failed to remove from Business cart',
       error: error instanceof Error ? error.message : String(error),
     };
   }

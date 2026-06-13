@@ -4,6 +4,10 @@ export interface AddToCartParams {
   quantity?: number;        // Quantity to add (default: 1)
 }
 
+export interface RemoveFromCartParams {
+  asin: string;             // Amazon ASIN — must be currently in the cart
+}
+
 export interface CartItem {
   title: string;
   price: string;
