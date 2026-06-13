@@ -208,17 +208,31 @@ export async function checkLoginStatusBusiness(): Promise<OperationResult> {
     await page.goto(BASE_URL, { waitUntil: 'networkidle' });
 
     const loginInfo = await page.evaluate(() => {
-      const accountList = document.querySelector('#nav-link-accountList-nav-line-1');
-      const accountText = accountList?.textContent?.trim() || '';
+      const candidates = [
+        '#nav-link-accountList-nav-line-1',
+        '#nav-link-accountList',
+        '[data-csa-c-content-id="nav_ya_signin"]',
+        '#nav-your-amazon-business',
+        '#nav-link-yourAccount',
+      ];
+      let accountText = '';
+      for (const sel of candidates) {
+        const el = document.querySelector(sel);
+        const t = el?.textContent?.trim() || '';
+        if (t) {
+          accountText = t;
+          if (t.includes('Hello')) break;
+        }
+      }
+      if (!accountText.includes('Hello')) {
+        const nav = document.querySelector('#nav-belt, #nav-main, #nav-tools, header');
+        const navText = nav?.textContent || '';
+        const m = navText.match(/Hello[^,\n]*[,\n][^\n]{1,80}/);
+        if (m) accountText = m[0].trim().slice(0, 120);
+      }
       const isLoggedIn = accountText.includes('Hello');
-
       const cookieCount = document.cookie.split(';').filter((c) => c.trim()).length;
-
-      return {
-        isLoggedIn,
-        accountText,
-        cookieCount,
-      };
+      return { isLoggedIn, accountText, cookieCount };
     });
 
     console.log('Business login status check:', {

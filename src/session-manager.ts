@@ -2,7 +2,8 @@ import { BrowserContext, Page, Cookie } from 'patchright';
 import fs from 'fs';
 import path from 'path';
 
-const COOKIES_FILE = path.resolve('./user-data/amazon-session-cookies.json');
+const USER_DATA_DIR = path.resolve(process.env.USER_DATA_DIR || './user-data');
+const COOKIES_FILE = path.join(USER_DATA_DIR, 'amazon-session-cookies.json');
 
 /**
  * Save current Amazon cookies to a JSON file with extended expiration.
