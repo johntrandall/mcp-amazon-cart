@@ -70,9 +70,6 @@ services:
       # entrypoint.sh. Empty value disables x11vnc (entrypoint refuses
       # to start it unauthenticated).
       VNC_PASSWORD: ${VNC_PASSWORD}
-      # Pushover gate for place_order (autonomous-shopping skill).
-      PUSHOVER_APP_TOKEN: ${PUSHOVER_APP_TOKEN}
-      PUSHOVER_USER_KEY: ${PUSHOVER_USER_KEY}
       TZ: "America/New_York"
 
     volumes:

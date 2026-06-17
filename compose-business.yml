@@ -40,8 +40,6 @@ services:
       VNC_PORT: "5900"
       AUTH_TOKEN: ${AUTH_TOKEN}
       VNC_PASSWORD: ${VNC_PASSWORD}
-      PUSHOVER_APP_TOKEN: ${PUSHOVER_APP_TOKEN}
-      PUSHOVER_USER_KEY: ${PUSHOVER_USER_KEY}
       TZ: "America/New_York"
 
     volumes:

@@ -107,9 +107,9 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Default env. The values that MUST be supplied at runtime (AUTH_TOKEN,
-# VNC_PASSWORD, AMAZON_DOMAIN per stack, PUSHOVER_*) are declared in the
-# compose Env array — declaring them here would let stale build-time values
-# leak into the image.
+# VNC_PASSWORD, AMAZON_DOMAIN per stack) are declared in the compose Env
+# array — declaring them here would let stale build-time values leak into
+# the image.
 ENV NODE_OPTIONS="--max-old-space-size=2048" \
     DISPLAY=:99 \
     DISPLAY_NUM=99 \

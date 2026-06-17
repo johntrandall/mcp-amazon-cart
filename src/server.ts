@@ -124,7 +124,7 @@ const TOOLS = [
   {
     name: 'place_order',
     description:
-      'Place the current cart as an order. REQUIRES Pushover ACK from the user before finalizing. Returns order ID on success.',
+      'Place the current cart as an order. Enforces a hard subtotal cap (confirm_total_max_usd) server-side; operator approval is the caller\'s responsibility (autonomous-shopping skill). Returns order ID on success.',
     inputSchema: {
       type: 'object' as const,
       properties: {
