@@ -20,6 +20,15 @@ import { placeOrder } from './place-order';
 import { closeBrowser, getContext, getPage } from './browser';
 import { saveAmazonSession, restoreAmazonSession } from './session-manager';
 import { dumpDom, inspectSelectors, findText } from './debug';
+import {
+  listReturnableItems,
+  startReturn,
+  getReturnStatus,
+  finalizeReturn,
+  listReturns,
+  cancelReturn,
+  RETURN_REASONS,
+} from './returns';
 
 dotenv.config();
 
@@ -150,6 +159,140 @@ const TOOLS = [
     inputSchema: { type: 'object' as const, properties: {} },
   },
 
+  // ---- Returns (both accounts) ----
+  {
+    name: 'list_returnable_items',
+    description:
+      'List items from recent orders. Returns items up to lookback_days regardless of return eligibility — past-window items appear with negative days_remaining, so callers can resolve an item the user mentions even when it can no longer be returned. Read-only.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account: {
+          type: 'string',
+          enum: ['personal', 'business'],
+          description: 'Which Amazon account',
+        },
+        lookback_days: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 365,
+          description: 'How far back to scan order history. Default 60; capped at 365 to bound scan latency.',
+          default: 60,
+        },
+      },
+      required: ['account'],
+    },
+  },
+  {
+    name: 'start_return',
+    description:
+      'Open the Amazon returns wizard for a specific item. Performs fail-fast eligibility checks (return window, non-returnable, account match, order ID format, auth, CAPTCHA) before any browser writes. On success returns a task_id, the agent-supplied reason echoed back (so caller can confirm before finalize), the offered refund methods, and whether replacement is also available (refund only for v1). Does NOT submit the return — call finalize_return for that.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account: {
+          type: 'string',
+          enum: ['personal', 'business'],
+          description: 'Which Amazon account',
+        },
+        order_id: {
+          type: 'string',
+          description: 'Amazon order ID, format ###-#######-#######. Whitespace is trimmed before validation.',
+        },
+        item_id: {
+          type: 'string',
+          description: 'ASIN of the item being returned. Resolve via list_returnable_items first.',
+        },
+        quantity: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Quantity to return. Omit to return the entire line item.',
+        },
+        reason: {
+          type: 'string',
+          enum: [...RETURN_REASONS],
+          description: 'Agent-inferred Amazon return reason. Required. Echoed back in the response so the caller can confirm or override in finalize_return.',
+        },
+        reason_prose: {
+          type: 'string',
+          description: 'Optional: original user prose that drove the reason inference. Stored in the audit log.',
+        },
+      },
+      required: ['account', 'order_id', 'item_id', 'reason'],
+    },
+  },
+  {
+    name: 'get_return_status',
+    description:
+      'Poll the current wizard step for a task_id. Use when start_return reported a slow step, or to confirm state before finalize_return. Read-only.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string', description: 'task_id from start_return' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'finalize_return',
+    description:
+      'Submit the return for a task_id from start_return. Optionally override the echoed reason. Returns return_id and a host-side path to the printable QR code PNG. After this call the return is committed (cancelable via cancel_return only until carrier scan).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string', description: 'task_id from start_return' },
+        confirm_reason: {
+          type: 'string',
+          enum: [...RETURN_REASONS],
+          description: 'Optional: override the reason picked at start_return.',
+        },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'list_returns',
+    description:
+      'List returns for an account, optionally filtered by status. Read-only. Use for "did the refund post?" and "did Amazon receive it?" queries.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account: {
+          type: 'string',
+          enum: ['personal', 'business'],
+          description: 'Which Amazon account',
+        },
+        status: {
+          type: 'string',
+          enum: ['open', 'completed', 'all'],
+          description: 'Filter by return status. Default: all.',
+          default: 'all',
+        },
+      },
+      required: ['account'],
+    },
+  },
+  {
+    name: 'cancel_return',
+    description:
+      'Cancel a return that has not yet been physically dropped off (carrier-scanned). Returns success if cancelable, structured error if past scan or already refunded.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        account: {
+          type: 'string',
+          enum: ['personal', 'business'],
+          description: 'Which Amazon account',
+        },
+        return_id: {
+          type: 'string',
+          description: 'return_id from finalize_return or list_returns',
+        },
+      },
+      required: ['account', 'return_id'],
+    },
+  },
+
   // ---- Debug / selector discovery ----
   // These tools let an out-of-container caller (e.g. a Claude session) inspect
   // the live Amazon DOM in this container's Chrome without needing VNC.
@@ -267,6 +410,26 @@ function createMcpServer(): Server {
           };
           break;
         }
+
+        // Returns (both accounts)
+        case 'list_returnable_items':
+          result = await listReturnableItems(args as any);
+          break;
+        case 'start_return':
+          result = await startReturn(args as any);
+          break;
+        case 'get_return_status':
+          result = await getReturnStatus(args as any);
+          break;
+        case 'finalize_return':
+          result = await finalizeReturn(args as any);
+          break;
+        case 'list_returns':
+          result = await listReturns(args as any);
+          break;
+        case 'cancel_return':
+          result = await cancelReturn(args as any);
+          break;
 
         // Debug / selector discovery
         case 'debug_dump_dom':

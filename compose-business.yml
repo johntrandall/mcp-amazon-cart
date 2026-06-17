@@ -41,9 +41,11 @@ services:
       AUTH_TOKEN: ${AUTH_TOKEN}
       VNC_PASSWORD: ${VNC_PASSWORD}
       TZ: "America/New_York"
+      RETURNS_HOST_PATH_PREFIX: /Users/johnrandall/amazon-returns
 
     volumes:
       - mcp-amazon-cart-business_user-data:/data/user-data
+      - /Users/johnrandall/amazon-returns:/var/lib/amazon-cart/returns
 
     dns:
       - 100.100.100.100

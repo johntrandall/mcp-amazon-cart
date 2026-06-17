@@ -71,11 +71,18 @@ services:
       # to start it unauthenticated).
       VNC_PASSWORD: ${VNC_PASSWORD}
       TZ: "America/New_York"
+      # Host-side path prefix for QR PNG files and audit JSON logs.
+      # Required: returns module fails to start without this env var.
+      RETURNS_HOST_PATH_PREFIX: /Users/johnrandall/amazon-returns
 
     volumes:
       # Persistent Amazon Personal Chrome profile. Survives container
       # restarts so John's Amazon login persists across redeploys.
       - mcp-amazon-cart-personal_user-data:/data/user-data
+      # Returns QR PNGs + audit logs: host path ↔ container path.
+      # Without this mount finalize_return writes to an ephemeral path
+      # the host-side print-qr skill can't reach.
+      - /Users/johnrandall/amazon-returns:/var/lib/amazon-cart/returns
 
     # DNS — let the container resolve Tailscale + LAN hostnames.
     # Matches P1s convention.
