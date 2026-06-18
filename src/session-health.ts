@@ -73,11 +73,13 @@ function ordersUrlFor(account: ReturnAccount): string {
 }
 
 function signinUrlFor(_account: ReturnAccount): string {
-  // www.amazon.com/ap/signin is the universal endpoint; business-side
-  // adds `?openid.assoc_handle=amzn_business_ldap` but Amazon redirects
-  // /ap/signin into the correct flow when the cookie jar signals B2B.
-  // Going via the bare endpoint sidesteps the assoc_handle drift.
-  return `https://www.${AMAZON_DOMAIN}/ap/signin`;
+  // 2026-06-18 OBSERVE: bare /ap/signin returns Amazon's "Looking for
+  // Something?" error page (verified via debug_dump_dom). The user-facing
+  // /gp/sign-in.html endpoint 302's into /ap/signin with the required
+  // openid.return_to / openid.assoc_handle=usflex query params, landing
+  // on the real signin form. Use that consumer entry point — Amazon's
+  // own redirect picks the correct downstream flow per cookie jar.
+  return `https://www.${AMAZON_DOMAIN}/gp/sign-in.html`;
 }
 
 // ----------------------------------------------------------------------------
