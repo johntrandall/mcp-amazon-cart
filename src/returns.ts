@@ -246,17 +246,42 @@ async function detectCurrentWizardStep(page: Page): Promise<DetectedStep> {
   return 'unknown';
 }
 
+async function dismissRufusOverlayIfPresent(page: Page): Promise<void> {
+  // Amazon's Rufus AI assistant occasionally injects a full-page "Continue to site"
+  // interstitial whose button matches the same has-text("Continue") selector we use
+  // for the wizard Continue button. Close it before looking for the real Continue.
+  const closeCandidates = [
+    '#zumaRufusCloseButton',
+    'button[aria-label="Close Rufus" i]',
+    'button[id^="zumaRufus"][aria-label*="Close" i]',
+  ];
+  for (const sel of closeCandidates) {
+    const btn = page.locator(sel).first();
+    if ((await btn.count()) > 0 && (await btn.isVisible().catch(() => false))) {
+      await btn.click().catch(() => {});
+      return;
+    }
+  }
+  // Fallback: if the Rufus "Continue to site" button is itself visible, click it
+  // to dismiss the interstitial and land back on the wizard page.
+  const continueToSite = page.locator('#zumaRufusContinueToSite-announce').first();
+  if ((await continueToSite.count()) > 0 && (await continueToSite.isVisible().catch(() => false))) {
+    await continueToSite.click().catch(() => {});
+  }
+}
+
 async function clickContinue(page: Page): Promise<void> {
+  await dismissRufusOverlayIfPresent(page);
   const candidates = [
     'button[data-testid="continue-button"]',
     'input[value="Continue"]',
-    'button:has-text("Continue")',
+    'button:has-text("Continue"):not([id^="zumaRufus"]):visible',
     'button[type="submit"]:not([data-testid*="submit-return"])',
     'input[type="submit"]',
   ];
   for (const sel of candidates) {
     const btn = page.locator(sel).first();
-    if ((await btn.count()) > 0) {
+    if ((await btn.count()) > 0 && (await btn.isVisible().catch(() => false))) {
       await btn.click();
       return;
     }
