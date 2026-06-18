@@ -165,6 +165,44 @@ async function main(): Promise<void> {
     bad('Banner detection — known + unknown IDs', err);
   }
 
+  // ---- 2a. Benign banner ids are filtered out ----
+  try {
+    // yourOrderHistoryResultBanner is per-order-row decoration, NOT an error
+    const benignOnly = _testing.bannersFromIds(['yourOrderHistoryResultBanner']);
+    assert.deepStrictEqual(benignOnly.known, [], 'benign id should not produce a known banner');
+    assert.deepStrictEqual(benignOnly.unknown, [], 'benign id should not land in unknown');
+
+    // Mixed: benign + known → only known surfaces, benign is dropped
+    const mixed = _testing.bannersFromIds([
+      'yourOrderHistoryResultBanner',
+      'yourOrderHistoryResultBanner',
+      'AttentionRequiredBanner',
+    ]);
+    assert.deepStrictEqual(mixed.known, ['attention_required'],
+      'AttentionRequiredBanner should survive benign filter');
+    assert.deepStrictEqual(mixed.unknown, [],
+      'benign duplicates should not land in unknown');
+
+    // Page with ONLY benign banners (no error banners) → not banner_blocked
+    const pageBenignOnly = classifyHealth('https://www.amazon.com/your-orders', {
+      bodyText: 'Hello, John\nYour Orders',
+      bannerIds: [
+        'yourOrderHistoryResultBanner',
+        'yourOrderHistoryResultBanner',
+        'yourOrderHistoryResultBanner',
+      ],
+      hasOtpField: false,
+      hasApprovePushText: false,
+      hasAccountLockText: false,
+    });
+    assert.strictEqual(pageBenignOnly, 'healthy',
+      'page with ONLY benign banners + greeting should classify healthy');
+
+    ok('Benign banner-id filter — yourOrderHistoryResultBanner');
+  } catch (err: any) {
+    bad('Benign banner-id filter — yourOrderHistoryResultBanner', err);
+  }
+
   // ---- 2b. Banner-recovery gating ----
   try {
     const { _testingBannerRecovery } = require('./banner-recovery');

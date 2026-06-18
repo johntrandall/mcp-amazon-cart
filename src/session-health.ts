@@ -127,12 +127,41 @@ const KNOWN_BANNER_PATTERNS: Array<{ key: KnownBanner; idIncludes: string[] }> =
   { key: 'order_retrieval_problem', idIncludes: ['Banner', 'roblem'] },
 ];
 
+// Banner ids whose presence is page structure / per-order-row UI decoration,
+// not an error indicator. Filtered out before classification so they do not
+// trip banner_blocked through the unknown-id branch.
+//
+// [Observed 2026-06-18] On /ab/your-orders for a known-degraded business
+// account, the captured DOM included 6 `yourOrderHistoryResultBanner` divs
+// alongside real error banners (AttentionRequiredBanner,
+// OrderRetreivalProblemBanner). 6× repetition on a single page is
+// structurally inconsistent with an attention banner — Amazon does not
+// stack identical error banners. The simpler reading is per-order-row
+// status decoration. Adding here pending Verified evidence (a known-
+// healthy /your-orders snapshot that still contains the same id would
+// confirm; absence would mean revisiting). If a future legitimate error
+// banner uses the same id, the unit test for known/benign discrimination
+// will flag the conflict.
+const BENIGN_BANNER_PATTERNS: Array<{ idIncludes: string[]; description: string }> = [
+  {
+    idIncludes: ['Banner', 'yourOrderHistoryResult'],
+    description: 'per-order-row decoration on /your-orders',
+  },
+];
+
+function isBenignBannerId(id: string): boolean {
+  return BENIGN_BANNER_PATTERNS.some((pat) =>
+    pat.idIncludes.every((needle) => id.includes(needle)),
+  );
+}
+
 function bannersFromIds(
   bannerIds: string[],
 ): { known: KnownBanner[]; unknown: string[] } {
   const known: KnownBanner[] = [];
   const unknown: string[] = [];
   for (const id of bannerIds) {
+    if (isBenignBannerId(id)) continue;
     let matched = false;
     for (const pat of KNOWN_BANNER_PATTERNS) {
       if (pat.idIncludes.every((needle) => id.includes(needle))) {
