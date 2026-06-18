@@ -20,6 +20,12 @@ import {
   type SessionHealth,
   type SessionHealthReport,
 } from './types';
+// Import is below the type-only block on purpose: banner-recovery imports
+// classifyHealth / isRefreshInFlight / _testing from THIS module. The
+// circular shape is fine because banner-recovery only touches values
+// declared above its own usage point at runtime (attemptBannerRecovery is
+// called from doCheckLogin, well after module evaluation).
+import { attemptBannerRecovery } from './banner-recovery';
 
 // ----------------------------------------------------------------------------
 // Module-load assertions — fail fast on misconfiguration before any tool fires.
@@ -348,8 +354,24 @@ async function doCheckLogin(account: ReturnAccount): Promise<CheckLoginResult> {
       };
     }
     ordersUrlReached = page.url();
-    const dom = await captureDomSnapshot(page);
-    const health = classifyHealth(ordersUrlReached, dom);
+    const initialDom = await captureDomSnapshot(page);
+    const initialHealth = classifyHealth(ordersUrlReached, initialDom);
+
+    // Self-heal layer: if banner_blocked, attempt cheap reload-only
+    // recovery (see banner-recovery.ts). Only triggers when the known
+    // banner set contains an entry on the reload-recoverable list; never
+    // calls refresh_session and never burns a TOTP. No-op for every other
+    // health state — additive, leaves the prior contract intact.
+    let dom = initialDom;
+    let health = initialHealth;
+    let selfHealAttempts = 0;
+    if (initialHealth === 'banner_blocked') {
+      const recovery = await attemptBannerRecovery(page, account, initialDom);
+      selfHealAttempts = recovery.attempts;
+      dom = recovery.finalDom;
+      health = recovery.finalHealth;
+      ordersUrlReached = recovery.finalUrl;
+    }
 
     const greeting = health === 'healthy' ? await captureGreeting(page) : undefined;
     const validatedGreeting =
@@ -369,6 +391,7 @@ async function doCheckLogin(account: ReturnAccount): Promise<CheckLoginResult> {
       bannersDetected: known,
       unknownBannerIds: unknown.length > 0 ? unknown : undefined,
       detectedAt: new Date().toISOString(),
+      selfHealAttempts: selfHealAttempts > 0 ? selfHealAttempts : undefined,
     };
 
     void appendSessionHealthEvent({
@@ -376,6 +399,7 @@ async function doCheckLogin(account: ReturnAccount): Promise<CheckLoginResult> {
       tool: 'check_login',
       account,
       final_error_code: 'success',
+      self_heal_attempts: selfHealAttempts > 0 ? selfHealAttempts : undefined,
     });
 
     return result;

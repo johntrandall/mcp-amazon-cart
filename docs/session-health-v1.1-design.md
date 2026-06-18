@@ -579,6 +579,19 @@ Model: **Opus 4.7 1M context**, not Sonnet. v1.0 build session ran out of contex
 3. **TOTP type assumption** — TOTP only works if Amazon account has TOTP MFA (not SMS-only). Document during deploy; some accounts may need MFA-method change.
 4. **Pushover 1P entry path** — spec assumes `op://JRVIS Infra/Pushover/{app_token,user_key}`. Deploy session must `op item list --vault "JRVIS Infra" | grep -i pushover` and confirm actual paths.
 
+## Amendment 2026-06-18: banner-blocked self-heal layer
+
+Production OBSERVE found the business account stuck in `banner_blocked` with banners `[order_retrieval_problem, attention_required]`. `refresh_session` was the documented remedy (success criterion 2 below), but it consumes a TOTP from 1Password and runs a full email→password→MFA flow — wrong tool for a transient server-side "We had a problem retrieving your orders" error that typically clears on page reload.
+
+Added (banner-recovery.ts):
+
+- **Tier 1 (cheap, reload-only)**: `attemptBannerRecovery` is called from `doCheckLogin` when `classifyHealth` returns `banner_blocked` and the known-banner set contains `order_retrieval_problem`. Up to 2 page reloads with 2s + 5s backoff. Re-classifies after each reload; returns the first non-`banner_blocked` state.
+- **Tier 2 (operator-driven, unchanged)**: For `attention_required` alone, persistent `banner_blocked`, or any other state, operator still calls `refresh_session` explicitly. Success criterion 2 below still applies.
+- **Never auto-escalates** from banner detection to `refresh_session` — TOTP-burn / MFA-window race risk.
+- **Short-circuits** if `refreshInFlight.has(account)` so concurrent refresh isn't stomped by a reload.
+- **Gated** by env var `AMAZON_BANNER_AUTO_RECOVER` (default `"1"`; set `"0"` to disable without redeploying).
+- **Audit**: `SessionHealthAuditRecord.self_heal_attempts` records the count (bounded 0..2) — not an auth oracle (same signal Amazon already serves via /your-orders 5xx to any client).
+
 ## Success criteria for Phase 5 OBSERVE termination
 
 Phase 5 unattended loop terminates **SUCCESS** when ALL:

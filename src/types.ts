@@ -265,6 +265,11 @@ export interface CheckLoginSuccess {
   bannersDetected: KnownBanner[];
   unknownBannerIds?: string[];
   detectedAt: string;
+  // Reload-only banner-recovery attempts performed during this
+  // check_login. Absent when zero (the common case). Never includes
+  // refresh_session attempts — those are a different operation and are
+  // tracked via last_refresh_* on SessionHealthReport.
+  selfHealAttempts?: number;
 }
 
 export interface CheckLoginError {
@@ -346,9 +351,17 @@ export interface ReturnAuditRecord {
 // steps_attempted stay in the transient tool response only; both
 // would otherwise be auth-state oracles for anyone who later
 // reads the audit log.
+//
+// self_heal_attempts (added 2026-06-18) is a bounded reload counter
+// (0..RELOAD_BACKOFF_MS.length) for the banner-recovery layer in
+// banner-recovery.ts. It is NOT an auth oracle — it only reveals that
+// a transient order-page banner appeared and was reloaded; the same
+// signal is already public via /your-orders 5xx responses Amazon
+// serves to any client.
 export interface SessionHealthAuditRecord {
   timestamp: string;
   tool: 'refresh_session' | 'check_login' | 'session_health';
   account: ReturnAccount;
   final_error_code: RefreshErrorCode | CheckLoginErrorCode | 'success';
+  self_heal_attempts?: number;
 }

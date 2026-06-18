@@ -165,6 +165,63 @@ async function main(): Promise<void> {
     bad('Banner detection — known + unknown IDs', err);
   }
 
+  // ---- 2b. Banner-recovery gating ----
+  try {
+    const { _testingBannerRecovery } = require('./banner-recovery');
+    const { isReloadRecoverable, isAutoRecoverEnabled, RELOAD_BACKOFF_MS } =
+      _testingBannerRecovery;
+
+    // OrderRetreivalProblemBanner — reload-recoverable
+    assert.strictEqual(isReloadRecoverable(SNAPSHOT_BANNER_RETRIEVAL), true,
+      'OrderRetreivalProblemBanner should be reload-recoverable');
+
+    // AttentionRequiredBanner — NOT reload-recoverable on its own
+    assert.strictEqual(isReloadRecoverable(SNAPSHOT_BANNER_ATTENTION), false,
+      'AttentionRequiredBanner alone should NOT be reload-recoverable');
+
+    // Unknown banners — NOT reload-recoverable (could be promo overlay)
+    assert.strictEqual(isReloadRecoverable(SNAPSHOT_BANNER_UNKNOWN), false,
+      'Unknown banners should NOT be reload-recoverable');
+
+    // Mixed: order_retrieval_problem + attention_required → still recoverable
+    // (the cheap reload might clear the retrieval banner; what's left is the
+    // operator's call but the attempt is worth it).
+    const mixedRetrieval = {
+      ...SNAPSHOT_BANNER_RETRIEVAL,
+      bannerIds: ['OrderRetreivalProblemBanner', 'AttentionRequiredBanner'],
+    };
+    assert.strictEqual(isReloadRecoverable(mixedRetrieval), true,
+      'order_retrieval_problem + attention_required should still trigger a reload attempt');
+
+    // Healthy snapshot → no banners, no recovery
+    assert.strictEqual(isReloadRecoverable(SNAPSHOT_HEALTHY), false,
+      'Empty banner set should not trigger recovery');
+
+    // Env var gate: default ON
+    const savedEnv = process.env.AMAZON_BANNER_AUTO_RECOVER;
+    delete process.env.AMAZON_BANNER_AUTO_RECOVER;
+    assert.strictEqual(isAutoRecoverEnabled(), true, 'Default should be enabled');
+    process.env.AMAZON_BANNER_AUTO_RECOVER = '1';
+    assert.strictEqual(isAutoRecoverEnabled(), true, '"1" should enable');
+    process.env.AMAZON_BANNER_AUTO_RECOVER = '0';
+    assert.strictEqual(isAutoRecoverEnabled(), false, '"0" should disable');
+    process.env.AMAZON_BANNER_AUTO_RECOVER = 'true';
+    assert.strictEqual(isAutoRecoverEnabled(), true, 'Any non-"0" should enable');
+    if (savedEnv !== undefined) process.env.AMAZON_BANNER_AUTO_RECOVER = savedEnv;
+    else delete process.env.AMAZON_BANNER_AUTO_RECOVER;
+
+    // Backoff schedule is bounded
+    assert.ok(Array.isArray(RELOAD_BACKOFF_MS) && RELOAD_BACKOFF_MS.length > 0
+      && RELOAD_BACKOFF_MS.length <= 3,
+      'RELOAD_BACKOFF_MS should be a bounded array (1..3 entries)');
+    assert.ok(RELOAD_BACKOFF_MS.every((n: number) => Number.isInteger(n) && n > 0 && n < 30_000),
+      'Each backoff should be a positive ms value < 30s');
+
+    ok('Banner-recovery — gating predicates');
+  } catch (err: any) {
+    bad('Banner-recovery — gating predicates', err);
+  }
+
   // ---- 3. opRead env-var validation ----
   try {
     const savedToken = process.env.OP_SERVICE_ACCOUNT_TOKEN;
