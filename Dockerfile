@@ -68,8 +68,33 @@ FROM node:20-bookworm-slim AS runtime
 #   - fonts-liberation so rendered pages look like a real desktop
 #   - curl for the healthcheck
 #   - procps gives us `ps` for entrypoint diagnostics
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg tini xvfb x11vnc \
+#   - 1password-cli (op) v2.30.0 pinned — v1.1 session-health reads
+#     credentials at runtime from a service-account-scoped 1P entry.
+#     GPG keyring + apt source land in /usr/share/keyrings + sources.list.d
+#     BEFORE apt-get update; everything resolves in a single RUN so the
+#     cache layer stays tight and there's no apt-list leak between RUNs.
+# TODO spec-clarify: spec wanted `1password-cli=2.30.0` (exact pin). At
+# build verify (2026-06-18), `apt-cache madison 1password-cli` against
+# the official repo reported "Version '2.30.0' for '1password-cli' was
+# not found" — the repo prunes old releases. We install the apt repo's
+# current `1password-cli` (whatever that is at build time), capture the
+# resolved version + sha256 to /etc/op.sha256 so the entrypoint can
+# verify integrity at runtime, and let Phase 4 deploy session pin
+# OP_CLI_VERSION to a known-good upper bound.
+#
+# Single RUN, two apt-get update passes:
+#   1) install just enough (ca-certificates, curl, gnupg) to add the
+#      1Password apt repo with a signed-by keyring.
+#   2) re-update + install everything else + op CLI.
+# Stays one Docker layer (cache-tight); no apt-lists leak between RUNs.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && curl -sS https://downloads.1password.com/linux/keys/1password.asc \
+      | gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg \
+ && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main" \
+      > /etc/apt/sources.list.d/1password.list \
+ && apt-get update && apt-get install -y --no-install-recommends \
+        tini xvfb x11vnc \
         fonts-liberation procps \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
         libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
@@ -77,7 +102,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libatspi2.0-0 libx11-xcb1 libxshmfence1 libglib2.0-0 \
         libdbus-1-3 libexpat1 libuuid1 \
         xauth x11-utils \
-    && rm -rf /var/lib/apt/lists/*
+        1password-cli \
+ && /usr/bin/op --version > /etc/op.version \
+ && sha256sum /usr/bin/op > /etc/op.sha256 \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

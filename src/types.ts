@@ -181,3 +181,174 @@ export interface CancelReturnError {
 }
 
 export type CancelReturnResult = CancelReturnSuccess | CancelReturnError;
+
+// ---- v1.1 Session-health types ----
+
+export const SESSION_HEALTH_STATES = [
+  'healthy',
+  'banner_blocked',
+  'auth_expired',
+  'mfa_challenge',
+  'mfa_push_pending',
+  'captcha_challenge',
+  'account_locked',
+  'unknown_degraded',
+  'refresh_in_progress',
+] as const;
+export type SessionHealth = typeof SESSION_HEALTH_STATES[number];
+
+export const REFRESH_ERROR_CODES = [
+  'op_binary_missing',
+  'op_token_invalid',
+  'creds_missing',
+  'navigation_failed',
+  'email_step_failed',
+  'password_step_failed',
+  'mfa_required_no_totp',
+  'mfa_totp_rejected',
+  'captcha_encountered',
+  'security_challenge',
+  'account_locked',
+  'returns_in_flight',
+  'refresh_in_progress',
+  'amazon_domain_invalid',
+  'tracing_enabled',
+  'unknown_error',
+] as const;
+export type RefreshErrorCode = typeof REFRESH_ERROR_CODES[number];
+
+export const CHECK_LOGIN_ERROR_CODES = [
+  'browser_crashed',
+  'navigation_timeout',
+  'op_binary_missing',
+  'op_token_invalid',
+  'amazon_domain_invalid',
+] as const;
+export type CheckLoginErrorCode = typeof CHECK_LOGIN_ERROR_CODES[number];
+
+// Pushover-escalating subset of RefreshErrorCode. Single source of truth
+// referenced from session-health.ts (pushover_sent derivation) and
+// pushover.ts (sendPushoverEscalation gating).
+export const PUSHOVER_ESCALATION_CODES: ReadonlySet<RefreshErrorCode> = new Set<RefreshErrorCode>([
+  'op_binary_missing',
+  'op_token_invalid',
+  'creds_missing',
+  'password_step_failed',
+  'mfa_required_no_totp',
+  'mfa_totp_rejected',
+  'captcha_encountered',
+  'security_challenge',
+  'account_locked',
+  'amazon_domain_invalid',
+  'tracing_enabled',
+  'unknown_error',
+]);
+
+// TOTP RFC 6238 window. Amazon uses the standard 30s window. If less
+// than TOTP_TTL_REFRESH_THRESHOLD_SECONDS remain we sleep across the
+// window boundary to avoid the read-at-28s-submit-at-32s race.
+export const TOTP_WINDOW_SECONDS = 30;
+export const TOTP_TTL_REFRESH_THRESHOLD_SECONDS = 10;
+
+export const SESSION_HEALTH_AUDIT_RETENTION_DAYS = 14;
+
+export type KnownBanner = 'attention_required' | 'order_retrieval_problem' | 'unknown_banner';
+
+export interface CheckLoginSuccess {
+  success: true;
+  loggedIn: boolean;
+  health: SessionHealth;
+  greeting?: string;
+  cookieCount: number;
+  ordersUrl: string;
+  ordersUrlReached: string;
+  bannersDetected: KnownBanner[];
+  unknownBannerIds?: string[];
+  detectedAt: string;
+}
+
+export interface CheckLoginError {
+  success: false;
+  error_code: CheckLoginErrorCode;
+  message: string;
+}
+
+export type CheckLoginResult = CheckLoginSuccess | CheckLoginError;
+
+export type RefreshStep =
+  | 'navigate_signin'
+  | 'fill_email'
+  | 'fill_password'
+  | 'submit_password'
+  | 'mfa_totp'
+  | 'trust_device'
+  | 'verify_landing';
+
+export interface RefreshSessionInput {
+  force?: boolean;
+}
+
+export interface RefreshSessionSuccess {
+  success: true;
+  pre_health: SessionHealth;
+  post_health: SessionHealth;
+  duration_ms: number;
+  steps_attempted: RefreshStep[];
+  session_saved: boolean;
+  pushover_sent: false;
+}
+
+export interface RefreshSessionError {
+  success: false;
+  error_code: RefreshErrorCode;
+  message: string;
+  step_failed?: RefreshStep;
+  pushover_sent: boolean;
+  recoverable: boolean;
+  retry_after_seconds?: number;
+}
+
+export type RefreshSessionResult = RefreshSessionSuccess | RefreshSessionError;
+
+export interface SessionHealthReport {
+  success: true;
+  health: SessionHealth;
+  greeting?: string;
+  bannersDetected: string[];
+  last_refresh_at?: string;
+  last_refresh_outcome?: 'success' | 'failure';
+  last_refresh_error_code?: RefreshErrorCode;
+  container_uptime_seconds: number;
+  in_flight_return_tasks: number;
+  refresh_in_flight: boolean;
+}
+
+// Audit shapes — what lands on disk.
+
+export interface ReturnAuditRecord {
+  timestamp: string;
+  account: ReturnAccount;
+  order_id: string;
+  item_id: string;
+  item_title: string;
+  quantity: number;
+  reason_enum: ReturnReason;
+  reason_prose?: string;
+  refund_amount_usd: number;
+  refund_method: RefundMethod;
+  return_id: string;
+  carrier: string;
+  drop_off_by: string;
+  qr_png_host_path: string;
+}
+
+// v1.1 audit shape — DELIBERATELY MINIMAL. step_failed and
+// steps_attempted stay in the transient tool response only; both
+// would otherwise be auth-state oracles for anyone who later
+// reads the audit log.
+export interface SessionHealthAuditRecord {
+  timestamp: string;
+  tool: 'refresh_session' | 'check_login' | 'session_health';
+  account: ReturnAccount;
+  final_error_code: RefreshErrorCode | CheckLoginErrorCode | 'success';
+}

@@ -42,10 +42,25 @@ services:
       VNC_PASSWORD: ${VNC_PASSWORD}
       TZ: "America/New_York"
       RETURNS_HOST_PATH_PREFIX: /volume1/docker/amazon-returns
+      # ---- v1.1 session-health (runtime `op read` from 1Password) ----
+      # Same shape as compose-personal.yml; per-stack env values differ
+      # (paths point at the Amazon Business 1P entry, not Personal).
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN}
+      # Business account:
+      #   op://JRVIS Execution/Amazon Business/username
+      #   op://JRVIS Execution/Amazon Business/password
+      #   op://JRVIS Execution/Amazon Business/one-time password   (optional, only if MFA enabled)
+      AMAZON_LOGIN_EMAIL_1P_PATH: ${AMAZON_LOGIN_EMAIL_1P_PATH}
+      AMAZON_LOGIN_PASSWORD_1P_PATH: ${AMAZON_LOGIN_PASSWORD_1P_PATH}
+      AMAZON_LOGIN_TOTP_1P_PATH: ${AMAZON_LOGIN_TOTP_1P_PATH:-}
+      PUSHOVER_APP_TOKEN_1P_PATH: ${PUSHOVER_APP_TOKEN_1P_PATH}
+      PUSHOVER_USER_KEY_1P_PATH: ${PUSHOVER_USER_KEY_1P_PATH}
+      PUSHOVER_TEST_MODE: ${PUSHOVER_TEST_MODE:-false}
 
     volumes:
       - mcp-amazon-cart-business_user-data:/data/user-data
       - /volume1/docker/amazon-returns:/var/lib/amazon-cart/returns
+      - /volume1/docker/amazon-cart-session-health:/var/lib/amazon-cart/session-health
 
     dns:
       - 100.100.100.100

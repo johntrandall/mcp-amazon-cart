@@ -8,13 +8,12 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
-import { searchProducts, addToCart, removeFromCart, getCart, checkLoginStatus } from './amazon';
+import { searchProducts, addToCart, removeFromCart, getCart } from './amazon';
 import {
   searchProductsBusiness,
   addToCartBusiness,
   removeFromCartBusiness,
   getCartBusiness,
-  checkLoginStatusBusiness,
 } from './amazon-business';
 import { placeOrder } from './place-order';
 import { closeBrowser, getContext, getPage } from './browser';
@@ -29,6 +28,14 @@ import {
   cancelReturn,
   RETURN_REASONS,
 } from './returns';
+import {
+  checkLoginPersonal,
+  checkLoginBusiness,
+  refreshSessionPersonal,
+  refreshSessionBusiness,
+  sessionHealthPersonal,
+  sessionHealthBusiness,
+} from './session-health';
 
 dotenv.config();
 
@@ -79,7 +86,14 @@ const TOOLS = [
   },
   {
     name: 'check_login',
-    description: 'Check if logged into personal Amazon',
+    description:
+      'Probe personal Amazon for session health. Navigates /your-orders, returns ' +
+      'a typed CheckLoginResult with health (healthy / banner_blocked / auth_expired / ' +
+      'mfa_challenge / mfa_push_pending / captcha_challenge / account_locked / ' +
+      'unknown_degraded / refresh_in_progress), detected attention banners, and the ' +
+      'reached URL. If a refresh is mid-flight, returns refresh_in_progress without ' +
+      'navigating. Use session_health for the composite view that also includes ' +
+      'last_refresh state and active returns count.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
 
@@ -125,7 +139,63 @@ const TOOLS = [
   },
   {
     name: 'check_login_business',
-    description: 'Check if logged into Amazon Business',
+    description:
+      'Probe Amazon Business for session health. Navigates /ab/your-orders, returns ' +
+      'a typed CheckLoginResult (see check_login). If a refresh is mid-flight, ' +
+      'returns refresh_in_progress without navigating.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+
+  // ---- Session-health (v1.1) ----
+  {
+    name: 'refresh_session_personal',
+    description:
+      'Programmatic re-auth for the personal Amazon session. Fetches credentials ' +
+      'from 1Password at runtime (op CLI), drives the login wizard, handles TOTP ' +
+      'MFA, and escalates to Pushover on operator-actionable failures (CAPTCHA, ' +
+      'security challenges, wrong password, locked account). Returns a typed ' +
+      'RefreshSessionResult — never throws. Pass force=true to refresh even when ' +
+      'pre-flight health is already healthy. Refuses if a v1.0 returns task is in ' +
+      'flight (returns_in_flight).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        force: {
+          type: 'boolean',
+          description: 'Skip the pre-flight health check and refresh unconditionally.',
+        },
+      },
+    },
+  },
+  {
+    name: 'refresh_session_business',
+    description:
+      'Programmatic re-auth for the Amazon Business session. Same semantics as ' +
+      'refresh_session_personal, scoped to the business account.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        force: {
+          type: 'boolean',
+          description: 'Skip the pre-flight health check and refresh unconditionally.',
+        },
+      },
+    },
+  },
+  {
+    name: 'session_health_personal',
+    description:
+      'Composite session-health report for the personal account: current health, ' +
+      'detected banners, last refresh outcome/error, container uptime, in-flight ' +
+      'returns count, and whether a refresh is currently in flight. Read-only.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'session_health_business',
+    description:
+      'Composite session-health report for the business account: current health, ' +
+      'detected banners, last refresh outcome/error, container uptime, in-flight ' +
+      'returns count, and whether a refresh is currently in flight. Read-only.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
 
@@ -374,7 +444,7 @@ function createMcpServer(): Server {
           result = await removeFromCart(args as any);
           break;
         case 'check_login':
-          result = await checkLoginStatus();
+          result = await checkLoginPersonal();
           break;
 
         // Business
@@ -391,7 +461,21 @@ function createMcpServer(): Server {
           result = await removeFromCartBusiness(args as any);
           break;
         case 'check_login_business':
-          result = await checkLoginStatusBusiness();
+          result = await checkLoginBusiness();
+          break;
+
+        // ---- Session-health (v1.1) ----
+        case 'refresh_session_personal':
+          result = await refreshSessionPersonal(args as any);
+          break;
+        case 'refresh_session_business':
+          result = await refreshSessionBusiness(args as any);
+          break;
+        case 'session_health_personal':
+          result = await sessionHealthPersonal();
+          break;
+        case 'session_health_business':
+          result = await sessionHealthBusiness();
           break;
 
         // Order placement

@@ -76,6 +76,25 @@ services:
       # Synology host path — /Users/johnrandall is macOS-only; on Synology
       # the Docker data volume at /volume1/docker is the standard writable area.
       RETURNS_HOST_PATH_PREFIX: /volume1/docker/amazon-returns
+      # ---- v1.1 session-health (runtime `op read` from 1Password) ----
+      # OP_SERVICE_ACCOUNT_TOKEN is item-scoped to the three 1P entries
+      # below + the Pushover - mcp-amazon-cart entry. Rotate every 90 days.
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN}
+      # Literal op:// paths (not secrets). Personal account:
+      #   op://JRVIS Execution/Amazon Personal/username
+      #   op://JRVIS Execution/Amazon Personal/password
+      #   op://JRVIS Execution/Amazon Personal/one-time password   (optional, only if MFA enabled)
+      AMAZON_LOGIN_EMAIL_1P_PATH: ${AMAZON_LOGIN_EMAIL_1P_PATH}
+      AMAZON_LOGIN_PASSWORD_1P_PATH: ${AMAZON_LOGIN_PASSWORD_1P_PATH}
+      AMAZON_LOGIN_TOTP_1P_PATH: ${AMAZON_LOGIN_TOTP_1P_PATH:-}
+      # Pushover emergency-escalation channel — dedicated app entry:
+      #   op://JRVIS Infra/Pushover - mcp-amazon-cart/app_token
+      #   op://JRVIS Infra/Pushover - mcp-amazon-cart/user_key
+      PUSHOVER_APP_TOKEN_1P_PATH: ${PUSHOVER_APP_TOKEN_1P_PATH}
+      PUSHOVER_USER_KEY_1P_PATH: ${PUSHOVER_USER_KEY_1P_PATH}
+      # PUSHOVER_TEST_MODE=true → priority 0 (silent) for the criterion-4
+      # Pushover-fire smoke test during Phase 5 OBSERVE.
+      PUSHOVER_TEST_MODE: ${PUSHOVER_TEST_MODE:-false}
 
     volumes:
       # Persistent Amazon Personal Chrome profile. Survives container
@@ -85,6 +104,10 @@ services:
       # Without this mount finalize_return writes to an ephemeral path
       # the host-side print-qr skill can't reach.
       - /volume1/docker/amazon-returns:/var/lib/amazon-cart/returns
+      # v1.1 session-health audit log directory (daily-rotated JSONL).
+      # Host path must be excluded from Hyper Backup AND Cloud Sync
+      # stignore — audit records carry credential-rotation history.
+      - /volume1/docker/amazon-cart-session-health:/var/lib/amazon-cart/session-health
 
     # DNS — let the container resolve Tailscale + LAN hostnames.
     # Matches P1s convention.

@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import type { Page } from 'patchright';
 import { getContext } from './browser';
+import { writeReturnEvent } from './audit-log';
 import {
   RETURN_REASONS,
   type ReturnAccount,
@@ -79,6 +80,16 @@ setInterval(async () => {
     sweepRunning = false;
   }
 }, 60_000);
+
+/**
+ * Active-task count for the v1.1 refresh_session pre-flight guard. A
+ * non-zero count means a returns wizard tab is parked on the singleton
+ * browser context and a refresh would yank it. Exported separately so
+ * session-health.ts doesn't need to peek at TASKS directly.
+ */
+export function getActiveReturnTaskCount(): number {
+  return TASKS.size;
+}
 
 // ---- Selector constants (TODO: fill via debug_inspect_selectors session) ----
 
@@ -865,9 +876,11 @@ export async function finalizeReturn(params: {
 
     await page.close().catch(() => {});
 
-    // Write audit log AFTER finalize completes (per spec)
-    const auditPath = `${CONTAINER_RETURNS_DIR}/${dateStr}-${task.account}-${return_id}.json`;
-    const auditData = {
+    // Write audit log AFTER finalize completes (per spec). Delegates to
+    // the shared audit-log.ts writer (v1.1 refactor) — preserves the v1.0
+    // per-event filename pattern.
+    const auditFilename = `${dateStr}-${task.account}-${return_id}.json`;
+    await writeReturnEvent(auditFilename, {
       timestamp: new Date().toISOString(),
       account: task.account,
       order_id: task.order_id,
@@ -882,9 +895,6 @@ export async function finalizeReturn(params: {
       carrier,
       drop_off_by,
       qr_png_host_path,
-    };
-    await fs.writeFile(auditPath, JSON.stringify(auditData, null, 2)).catch((err: Error) => {
-      console.error(`Audit log write failed: ${err.message}`);
     });
 
     // Server-authored caption — callers MUST pass this to print-qr verbatim
