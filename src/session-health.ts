@@ -78,6 +78,15 @@ function ordersUrlFor(account: ReturnAccount): string {
     : `https://${ACCOUNT_TO_DOMAIN[account]}/your-orders`;
 }
 
+// Homepage probe for session validity. Unlike /your-orders — whose signin
+// redirect carries openid.pape.max_auth_age=0 and FORCES re-auth even on a
+// valid session — the homepage shows the logged-in nav greeting without
+// forcing re-auth. Used as a secondary confirmation in doCheckLogin before
+// reporting an unhealthy state. (2026-06-23)
+function homeUrlFor(account: ReturnAccount): string {
+  return `https://${ACCOUNT_TO_DOMAIN[account]}/`;
+}
+
 function signinUrlFor(_account: ReturnAccount): string {
   // 2026-06-18 OBSERVE: bare /ap/signin returns Amazon's "Looking for
   // Something?" error page (verified via debug_dump_dom). The user-facing
@@ -243,19 +252,32 @@ async function captureDomSnapshot(page: Page): Promise<DomSnapshot> {
     const lock = /your account has been locked|account locked|temporarily locked/i.test(bodyText);
     // Authoritative logged-in signal: account-list nav greets a NAME. The
     // logged-out nav reads "Hello, sign in" / "Hello, Sign in" — exclude it.
+    // Retail nav uses #nav-link-accountList; Amazon Business uses
+    // #nav-link-yourAccount. Scan ALL candidates with querySelectorAll — the
+    // greeting span is often NOT the first `.nav-line-1` on the page (verified
+    // 2026-06-23: business /ab/your-orders greeting is in
+    // a#nav-link-yourAccount > span.nav-line-1, not the first .nav-line-1).
+    // Logged-out nav reads "Hello, sign in" — excluded.
     const greetSels = [
       '#nav-link-accountList-nav-line-1',
+      '#nav-link-accountList .nav-line-1',
+      '#nav-link-yourAccount .nav-line-1',
       '#nav-link-accountList',
+      '#nav-link-yourAccount',
       '.nav-line-1',
       '[id*="accountList"]',
+      '[id*="yourAccount"]',
     ];
     let loggedIn = false;
     for (const sel of greetSels) {
-      const t = (document.querySelector(sel)?.textContent || '').trim();
-      if (/^hello\b/i.test(t) && !/sign\s*in/i.test(t) && t.length <= 60) {
-        loggedIn = true;
-        break;
+      for (const el of Array.from(document.querySelectorAll(sel))) {
+        const t = (el.textContent || '').trim();
+        if (/^hello\b/i.test(t) && !/sign\s*in/i.test(t) && t.length <= 60) {
+          loggedIn = true;
+          break;
+        }
       }
+      if (loggedIn) break;
     }
     return {
       bodyText,
@@ -427,6 +449,27 @@ async function doCheckLogin(account: ReturnAccount): Promise<CheckLoginResult> {
       dom = recovery.finalDom;
       health = recovery.finalHealth;
       ordersUrlReached = recovery.finalUrl;
+    }
+
+    // Secondary confirmation against the homepage. /your-orders forces
+    // max_auth_age=0 re-auth (→ false auth_expired) and surfaces transient
+    // order-display banners (→ false banner_blocked) on sessions that are
+    // perfectly valid for shopping (view_cart works). Before reporting ANY
+    // unhealthy state, re-probe the homepage — which does not force re-auth —
+    // and read the authoritative logged-in nav. Additive: only ever upgrades a
+    // false-negative to healthy, never the reverse. (2026-06-23)
+    if (health !== 'healthy') {
+      try {
+        await page.goto(homeUrlFor(account), { waitUntil: 'domcontentloaded', timeout: 20_000 });
+        const homeDom = await captureDomSnapshot(page);
+        if (classifyHealth(page.url(), homeDom) === 'healthy') {
+          health = 'healthy';
+          dom = homeDom;
+          ordersUrlReached = page.url();
+        }
+      } catch {
+        // Homepage probe failed — keep the prior health verdict.
+      }
     }
 
     const greeting = health === 'healthy' ? await captureGreeting(page) : undefined;
