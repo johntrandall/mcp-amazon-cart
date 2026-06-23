@@ -120,6 +120,7 @@ export interface DomSnapshot {
   hasOtpField: boolean; // #auth-mfa-otpcode visible
   hasApprovePushText: boolean; // "Approve this sign-in" textual signal
   hasAccountLockText: boolean; // account-lock/review language
+  loggedIn?: boolean; // authoritative: account-list nav greets a NAME (not "sign in")
 }
 
 const KNOWN_BANNER_PATTERNS: Array<{ key: KnownBanner; idIncludes: string[] }> = [
@@ -206,13 +207,22 @@ export function classifyHealth(url: string, dom: DomSnapshot): SessionHealth {
   if (/verify your identity/i.test(dom.bodyText)) {
     return 'mfa_challenge';
   }
+  // Authoritative logged-in signal: the account-list nav greets a NAME (not
+  // "sign in"). A valid session can still carry transient/account-level
+  // banners (order_retrieval_problem, attention_required) and reach the
+  // orders page — those describe account/order state, not session validity
+  // (verified: view_cart works in that state). Treat a logged-in nav as
+  // healthy so banners don't false-trip banner_blocked / unknown_degraded and
+  // provoke a needless refresh → headless CAPTCHA → Pushover. (2026-06-23)
+  if (dom.loggedIn) {
+    return 'healthy';
+  }
   // Banner detection — order matters: attention-banner outranks generic body.
   const { known, unknown } = bannersFromIds(dom.bannerIds);
   if (known.length > 0 || unknown.length > 0) {
     return 'banner_blocked';
   }
-  // Healthy iff the body has the canonical greeting text. We rely on
-  // captureDomSnapshot below to surface this through `bodyText`.
+  // Fallback (no authoritative nav signal): canonical greeting / orders text.
   if (/Hello[, ]/.test(dom.bodyText) || /Your Orders/i.test(dom.bodyText)) {
     return 'healthy';
   }
@@ -231,12 +241,29 @@ async function captureDomSnapshot(page: Page): Promise<DomSnapshot> {
     const bodyText = (document.body?.textContent || '').slice(0, 5000);
     const approve = /approve this sign-in|approve this sign in|notification on/i.test(bodyText);
     const lock = /your account has been locked|account locked|temporarily locked/i.test(bodyText);
+    // Authoritative logged-in signal: account-list nav greets a NAME. The
+    // logged-out nav reads "Hello, sign in" / "Hello, Sign in" — exclude it.
+    const greetSels = [
+      '#nav-link-accountList-nav-line-1',
+      '#nav-link-accountList',
+      '.nav-line-1',
+      '[id*="accountList"]',
+    ];
+    let loggedIn = false;
+    for (const sel of greetSels) {
+      const t = (document.querySelector(sel)?.textContent || '').trim();
+      if (/^hello\b/i.test(t) && !/sign\s*in/i.test(t) && t.length <= 60) {
+        loggedIn = true;
+        break;
+      }
+    }
     return {
       bodyText,
       bannerIds,
       hasOtpField: !!otp,
       hasApprovePushText: approve,
       hasAccountLockText: lock,
+      loggedIn,
     };
   });
 }
