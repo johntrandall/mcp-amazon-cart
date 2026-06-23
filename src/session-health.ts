@@ -470,6 +470,52 @@ interface FillResult {
   ok: boolean;
 }
 
+/**
+ * Return the first locator in `selectors` that exists AND is visible, or null.
+ * Visibility-gating is load-bearing: Amazon's sign-in form carries hidden
+ * inputs (e.g. the remembered-email `#ap-claim` with name="email"). Calling
+ * `.fill()` on a hidden input throws in patchright/Playwright. We must never
+ * select one — classify the page only by controls the user could actually act
+ * on. (2026-06-22)
+ */
+async function firstVisibleLocator(page: Page, selectors: string[]) {
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if ((await loc.count()) > 0 && (await loc.isVisible())) return loc;
+    } catch {
+      // try next selector
+    }
+  }
+  return null;
+}
+
+/** Accessibility fallback: first VISIBLE textbox whose accessible name matches. */
+async function visibleRoleTextbox(page: Page, name: RegExp) {
+  try {
+    const loc = page.getByRole('textbox', { name }).first();
+    if ((await loc.count()) > 0 && (await loc.isVisible())) return loc;
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/**
+ * Poll until any of `selectors` is visible, or `timeoutMs` elapses. Amazon
+ * renders the credential form via an async auth pagelet; classifying the page
+ * at `domcontentloaded` races that render and yields false negatives. Settle on
+ * a real, visible control before deciding what step we are on. (2026-06-22)
+ */
+async function waitForAnyVisible(page: Page, selectors: string[], timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await firstVisibleLocator(page, selectors)) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
 async function fillWithFallback(
   page: Page,
   candidates: string[],
@@ -669,27 +715,33 @@ async function doRefresh(
       }
     }
 
-    // 4 — email step (with combined-form A/B detection)
+    // 4 — settle, then email step. Amazon renders the sign-in form via an
+    // async auth pagelet and adapts the layout to cookie state (email-first vs
+    // remembered-email password-first vs passkey-first). Wait for SOME
+    // credential control to paint, then classify by what is VISIBLE — never by
+    // a once-only count at domcontentloaded, and never act on hidden inputs.
+    // (2026-06-22: the prior eager `#ap_password` count raced the pagelet, fell
+    // through to the email branch, and .fill()'d the hidden remembered-email
+    // input `#ap-claim` → email_step_failed. See field report same date.)
+    await waitForAnyVisible(
+      page,
+      ['#ap_password', 'input[type="password"]', '#ap_email_login', '#ap_email', 'input[type="email"]', '#auth-mfa-otpcode'],
+      10_000,
+    );
     steps_attempted.push('fill_email');
-    const combinedFormHasPassword =
-      (await page.locator('#ap_password').count().catch(() => 0)) > 0;
-    if (!combinedFormHasPassword) {
-      // TODO selector-discovery: confirm email field IDs on live wizard.
-      const emailCandidates = ['#ap_email_login', '#ap_email', 'input[name="email"]'];
-      const filled = await fillWithFallback(
-        page,
-        emailCandidates,
-        async () => {
-          const role = page.getByRole('textbox', { name: /email|phone/i }).first();
-          if ((await role.count()) > 0) {
-            await role.fill(email.reveal());
-            return true;
-          }
-          return false;
-        },
-        email,
-      );
-      if (!filled.ok) {
+    const visiblePasswordPresent =
+      (await firstVisibleLocator(page, ['#ap_password', 'input[type="password"]'])) !== null;
+    if (!visiblePasswordPresent) {
+      const emailLoc =
+        (await firstVisibleLocator(page, ['#ap_email_login', '#ap_email', 'input[type="email"]', 'input[name="email"]'])) ??
+        (await visibleRoleTextbox(page, /email|phone/i));
+      if (!emailLoc) {
+        await safeCleanup(page);
+        return finalizeFailure(account, 'email_step_failed', 'fill_email', pre_health, steps_attempted, allSecrets);
+      }
+      try {
+        await emailLoc.fill(email.reveal());
+      } catch {
         await safeCleanup(page);
         return finalizeFailure(account, 'email_step_failed', 'fill_email', pre_health, steps_attempted, allSecrets);
       }
@@ -697,11 +749,9 @@ async function doRefresh(
         await safeCleanup(page);
         return finalizeFailure(account, 'email_step_failed', 'fill_email', pre_health, steps_attempted, allSecrets);
       }
-      try {
-        await page.waitForLoadState('domcontentloaded', { timeout: 15_000 });
-      } catch {
-        /* may have stayed on same page */
-      }
+      await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
+      // Settle the password pagelet before the password step classifies it.
+      await waitForAnyVisible(page, ['#ap_password', 'input[type="password"]', '#auth-mfa-otpcode'], 10_000);
       const c = await detectChallengeOnPage(page);
       if (c === 'captcha') {
         await safeCleanup(page);
@@ -717,18 +767,14 @@ async function doRefresh(
       return finalizeFailure(account, 'tracing_enabled', 'fill_password', pre_health, steps_attempted, allSecrets);
     }
     try {
-      const pwdLoc = page.locator('#ap_password').first();
-      if ((await pwdLoc.count()) === 0) {
-        // Fallback — role-based
-        const role = page.getByRole('textbox', { name: /password/i }).first();
-        if ((await role.count()) === 0) {
-          await safeCleanup(page);
-          return finalizeFailure(account, 'password_step_failed', 'fill_password', pre_health, steps_attempted, allSecrets);
-        }
-        await role.fill(password.reveal());
-      } else {
-        await pwdLoc.fill(password.reveal());
+      const pwdLoc =
+        (await firstVisibleLocator(page, ['#ap_password', 'input[type="password"]'])) ??
+        (await visibleRoleTextbox(page, /password/i));
+      if (!pwdLoc) {
+        await safeCleanup(page);
+        return finalizeFailure(account, 'password_step_failed', 'fill_password', pre_health, steps_attempted, allSecrets);
       }
+      await pwdLoc.fill(password.reveal());
     } catch {
       await safeCleanup(page);
       return finalizeFailure(account, 'password_step_failed', 'fill_password', pre_health, steps_attempted, allSecrets);
