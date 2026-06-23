@@ -516,6 +516,49 @@ async function waitForAnyVisible(page: Page, selectors: string[], timeoutMs: num
   return false;
 }
 
+/**
+ * Submit the <form> that `field` actually belongs to, rather than clicking
+ * whatever button owns a hard-coded id. Amazon renders a sibling
+ * "Sign in with a passkey" button with id="continue" on the password page; a
+ * generic id-ordered click fires the (failing) passkey flow instead of
+ * submitting the password. Walk to the field's ancestor form and click ITS
+ * submit; fall back to the canonical #signInSubmit, then to native Enter.
+ * (2026-06-22)
+ */
+async function submitOwningForm(
+  page: Page,
+  field: Awaited<ReturnType<typeof firstVisibleLocator>>,
+): Promise<boolean> {
+  if (!field) return false;
+  try {
+    const submit = field
+      .locator('xpath=ancestor::form[1]')
+      .locator('button[type="submit"], input[type="submit"]')
+      .first();
+    if ((await submit.count()) > 0 && (await submit.isVisible())) {
+      await submit.click();
+      return true;
+    }
+  } catch {
+    // fall through
+  }
+  const byId = await firstVisibleLocator(page, ['#signInSubmit']);
+  if (byId) {
+    try {
+      await byId.click();
+      return true;
+    } catch {
+      // fall through
+    }
+  }
+  try {
+    await field.press('Enter');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function fillWithFallback(
   page: Page,
   candidates: string[],
@@ -766,8 +809,9 @@ async function doRefresh(
       await safeCleanup(page);
       return finalizeFailure(account, 'tracing_enabled', 'fill_password', pre_health, steps_attempted, allSecrets);
     }
+    let pwdLoc: Awaited<ReturnType<typeof firstVisibleLocator>> = null;
     try {
-      const pwdLoc =
+      pwdLoc =
         (await firstVisibleLocator(page, ['#ap_password', 'input[type="password"]'])) ??
         (await visibleRoleTextbox(page, /password/i));
       if (!pwdLoc) {
@@ -781,7 +825,9 @@ async function doRefresh(
     }
 
     steps_attempted.push('submit_password');
-    if (!(await clickContinueOrSignin(page))) {
+    // Submit the password field's OWN form — not the sibling passkey button
+    // (id="continue") that Amazon renders alongside it. (2026-06-22)
+    if (!(await submitOwningForm(page, pwdLoc))) {
       await safeCleanup(page);
       return finalizeFailure(account, 'password_step_failed', 'submit_password', pre_health, steps_attempted, allSecrets);
     }
