@@ -197,6 +197,45 @@ export const SESSION_HEALTH_STATES = [
 ] as const;
 export type SessionHealth = typeof SESSION_HEALTH_STATES[number];
 
+// Health states that genuinely prevent transacting (cart / checkout) because
+// the account is NOT usable: a real Amazon challenge is in the way, or the
+// session is gone. These hard-block purchasing.
+//
+// `banner_blocked` is DELIBERATELY ABSENT. [Verified 2026-06-24, live business
+// session screenshot] `banner_blocked` is derived from the /your-orders probe
+// and means only that the ORDER-HISTORY page failed to render cleanly
+// (AttentionRequiredBanner / OrderRetreivalProblemBanner). It does NOT mean the
+// account can't add to cart or check out — the cart and checkout pages load
+// from their own URLs and were observed fully functional ("Proceed to checkout"
+// present) while /your-orders showed those banners. Treating banner_blocked as
+// a transacting block was the false-positive that stranded the operator.
+// See classifyHealth() in session-health.ts and isPurchasingBlocked() below.
+//
+// `unknown_degraded` IS included: if we cannot positively confirm a logged-in
+// session AND we did not see a known-benign banner page, we conservatively
+// refuse to transact rather than risk acting on a signed-out / unexpected page.
+export const PURCHASE_BLOCKING_HEALTH_STATES: ReadonlySet<SessionHealth> = new Set<SessionHealth>([
+  'auth_expired',
+  'mfa_challenge',
+  'mfa_push_pending',
+  'captcha_challenge',
+  'account_locked',
+  'unknown_degraded',
+  'refresh_in_progress',
+]);
+
+/**
+ * Single source of truth for "does this health state block purchasing
+ * (cart / checkout)?" — used by check_login result derivation and by any
+ * consumer that needs to gate a transacting action on session health.
+ *
+ * Orders-page notification banners (banner_blocked) do NOT block purchasing;
+ * genuine challenge / signed-out states do.
+ */
+export function isPurchasingBlocked(health: SessionHealth): boolean {
+  return PURCHASE_BLOCKING_HEALTH_STATES.has(health);
+}
+
 export const REFRESH_ERROR_CODES = [
   'op_binary_missing',
   'op_token_invalid',
@@ -258,11 +297,23 @@ export interface CheckLoginSuccess {
   success: true;
   loggedIn: boolean;
   health: SessionHealth;
+  // Orthogonal to `health`: can the operator transact (add_to_cart / place_order)
+  // RIGHT NOW? This is the field purchasing consumers should gate on — NOT
+  // `loggedIn` (which is health==='healthy') and NOT `health !== 'banner_blocked'`.
+  // True unless a genuine challenge / signed-out state is in the way
+  // (see isPurchasingBlocked). An orders-page banner alone leaves this true.
+  // (2026-06-24)
+  purchasingAvailable: boolean;
   greeting?: string;
   cookieCount: number;
   ordersUrl: string;
   ordersUrlReached: string;
   bannersDetected: KnownBanner[];
+  // Non-blocking advisory: order-history banners seen on the /your-orders probe.
+  // Surfaced so the operator KNOWS order-history / returns reads may be
+  // degraded, while purchasing is still allowed. Populated from bannersDetected
+  // when health === 'banner_blocked'. (2026-06-24)
+  bannerWarnings?: KnownBanner[];
   unknownBannerIds?: string[];
   detectedAt: string;
   // Reload-only banner-recovery attempts performed during this

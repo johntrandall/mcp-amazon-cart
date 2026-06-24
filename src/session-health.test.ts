@@ -36,6 +36,7 @@ delete process.env.TRACING_ENABLED;
 delete process.env.PATCHRIGHT_TRACING;
 
 import { classifyHealth, _testing } from './session-health';
+import { isPurchasingBlocked, PURCHASE_BLOCKING_HEALTH_STATES } from './types';
 import { Secret, scrubMessage, OpError } from './op-credentials';
 import { _buildPushoverBodyForTest, PUSHOVER_ESCALATION_CODES } from './pushover';
 import { appendSessionHealthEvent } from './audit-log';
@@ -258,6 +259,110 @@ async function main(): Promise<void> {
     ok('Banner-recovery — gating predicates');
   } catch (err: any) {
     bad('Banner-recovery — gating predicates', err);
+  }
+
+  // ---- 2c. Purchasing-availability decoupling (2026-06-24) ----
+  // Orders-page banners must NOT block cart/checkout; genuine challenge,
+  // signed-out, and degraded states MUST block.
+  try {
+    // banner_blocked → purchasing STILL allowed (the false-block we fixed)
+    assert.strictEqual(
+      isPurchasingBlocked('banner_blocked'),
+      false,
+      'banner_blocked must NOT block purchasing — orders-history banner only',
+    );
+    assert.strictEqual(
+      isPurchasingBlocked('healthy'),
+      false,
+      'healthy must not block purchasing',
+    );
+
+    // Genuine challenge / signed-out states MUST still block purchasing.
+    for (const state of [
+      'auth_expired',
+      'mfa_challenge',
+      'mfa_push_pending',
+      'captcha_challenge',
+      'account_locked',
+      'unknown_degraded',
+      'refresh_in_progress',
+    ] as const) {
+      assert.strictEqual(
+        isPurchasingBlocked(state),
+        true,
+        `${state} MUST block purchasing`,
+      );
+    }
+
+    // The blocking set must never silently include banner_blocked or healthy.
+    assert.ok(
+      !PURCHASE_BLOCKING_HEALTH_STATES.has('banner_blocked'),
+      'PURCHASE_BLOCKING_HEALTH_STATES must not contain banner_blocked',
+    );
+    assert.ok(
+      !PURCHASE_BLOCKING_HEALTH_STATES.has('healthy'),
+      'PURCHASE_BLOCKING_HEALTH_STATES must not contain healthy',
+    );
+
+    // Cross-check classifier → purchasing decision for representative fixtures.
+    // Orders page with BOTH attention + retrieval banners but no greeting
+    // (the exact production false-block): classifies banner_blocked, yet
+    // purchasing must remain available.
+    const bothBanners = classifyHealth('https://www.amazon.com/your-orders', {
+      bodyText: 'Your Orders\nWe need your attention\nProblem retrieving your orders',
+      bannerIds: ['AttentionRequiredBanner', 'OrderRetreivalProblemBanner'],
+      hasOtpField: false,
+      hasApprovePushText: false,
+      hasAccountLockText: false,
+    });
+    assert.strictEqual(bothBanners, 'banner_blocked', 'both-banner page → banner_blocked');
+    assert.strictEqual(
+      isPurchasingBlocked(bothBanners),
+      false,
+      'both-banner banner_blocked page must STILL allow purchasing (the fix)',
+    );
+
+    // Real auth/captcha/otp/lock states still classify to a blocking health.
+    assert.strictEqual(
+      isPurchasingBlocked(
+        classifyHealth('https://www.amazon.com/ap/signin', SNAPSHOT_AUTH_EXPIRED),
+      ),
+      true,
+      'auth_expired (/ap/signin) must block purchasing',
+    );
+    assert.strictEqual(
+      isPurchasingBlocked(
+        classifyHealth('https://www.amazon.com/errors/validateCaptcha?x', SNAPSHOT_UNKNOWN),
+      ),
+      true,
+      'captcha_challenge must block purchasing',
+    );
+    assert.strictEqual(
+      isPurchasingBlocked(
+        classifyHealth('https://www.amazon.com/your-orders', SNAPSHOT_MFA_OTP),
+      ),
+      true,
+      'OTP-field page (mfa_challenge) must block purchasing',
+    );
+    assert.strictEqual(
+      isPurchasingBlocked(
+        classifyHealth('https://www.amazon.com/your-orders', SNAPSHOT_ACCOUNT_LOCKED),
+      ),
+      true,
+      'account_locked must block purchasing',
+    );
+
+    // Every blocking state must be a real SessionHealth member.
+    for (const s of PURCHASE_BLOCKING_HEALTH_STATES) {
+      assert.ok(
+        (SESSION_HEALTH_STATES as readonly string[]).includes(s),
+        `purchase-blocking state "${s}" not in SESSION_HEALTH_STATES`,
+      );
+    }
+
+    ok('Purchasing-availability — orders banners do not block; challenges do');
+  } catch (err: any) {
+    bad('Purchasing-availability — orders banners do not block; challenges do', err);
   }
 
   // ---- 3. opRead env-var validation ----

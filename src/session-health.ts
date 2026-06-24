@@ -10,6 +10,7 @@ import {
   PUSHOVER_ESCALATION_CODES,
   TOTP_TTL_REFRESH_THRESHOLD_SECONDS,
   TOTP_WINDOW_SECONDS,
+  isPurchasingBlocked,
   type CheckLoginErrorCode,
   type CheckLoginResult,
   type KnownBanner,
@@ -396,6 +397,9 @@ async function doCheckLogin(account: ReturnAccount): Promise<CheckLoginResult> {
     return {
       success: true,
       loggedIn: false,
+      // A refresh is mid-flight; the session is in motion. Block purchasing
+      // until it settles (refresh_in_progress is in PURCHASE_BLOCKING set).
+      purchasingAvailable: false,
       health: 'refresh_in_progress',
       cookieCount: 0,
       ordersUrl: ordersUrlFor(account),
@@ -479,15 +483,27 @@ async function doCheckLogin(account: ReturnAccount): Promise<CheckLoginResult> {
     const cookies = await context.cookies('https://www.amazon.com').catch(() => []);
 
     const { known, unknown } = bannersFromIds(dom.bannerIds);
+    // Purchasing is gated on the genuine-challenge / signed-out states ONLY.
+    // banner_blocked (an orders-history render problem) must NOT block cart /
+    // checkout — those load their own pages and were observed functional in
+    // that state. (2026-06-24, see types.ts isPurchasingBlocked + screenshot.)
+    const purchasingAvailable = !isPurchasingBlocked(health);
+    // When the orders probe is banner_blocked but purchasing is still allowed,
+    // surface the banners as a non-blocking advisory so the operator knows
+    // order-history / returns reads may be degraded.
+    const bannerWarnings =
+      health === 'banner_blocked' && known.length > 0 ? known : undefined;
     const result: CheckLoginResult = {
       success: true,
       loggedIn: health === 'healthy',
+      purchasingAvailable,
       health,
       greeting: validatedGreeting,
       cookieCount: cookies.length,
       ordersUrl,
       ordersUrlReached,
       bannersDetected: known,
+      bannerWarnings,
       unknownBannerIds: unknown.length > 0 ? unknown : undefined,
       detectedAt: new Date().toISOString(),
       selfHealAttempts: selfHealAttempts > 0 ? selfHealAttempts : undefined,
@@ -1029,6 +1045,7 @@ async function doRefresh(
         post = {
           success: true,
           loggedIn: health === 'healthy',
+          purchasingAvailable: !isPurchasingBlocked(health),
           health,
           cookieCount: cookies.length,
           ordersUrl: ordersUrlFor(account),

@@ -48,7 +48,15 @@ export async function getContext(): Promise<BrowserContext> {
         headless,
         viewport: { width: 1366, height: 900 },
         // Patchright already handles AutomationControlled; keep the flag for belt-and-suspenders.
-        args: ['--disable-blink-features=AutomationControlled'],
+        // --test-type suppresses Chrome's "You are using an unsupported
+        // command-line flag: --no-sandbox. Stability and security will suffer."
+        // infobar. In the container Chrome runs as root, so Playwright/patchright
+        // auto-appends --no-sandbox, which triggers that yellow infobar; it
+        // pollutes screenshots/automation and can shift element coordinates.
+        // --test-type is the canonical Chromium flag to suppress these
+        // unsupported-flag infobars. Cosmetic only — it does NOT re-enable the
+        // sandbox or change the security posture. (2026-06-24)
+        args: ['--disable-blink-features=AutomationControlled', '--test-type'],
         // x11vnc bootstrap path: when HEADLESS=false in the container, Xvfb is on :99
         // and the launched Chrome reads $DISPLAY from the env automatically.
       });
