@@ -134,6 +134,27 @@ export async function getPage(): Promise<Page> {
  * page JS, not of the 5-minute session auto-save (that reads cookies off the
  * BrowserContext and never touches the page).
  *
+ * IMPORTANT — those lifetime averages are NOT the steady-state rate. Re-measured
+ * the same two renderers later the same day over a 181-second window (cgroup
+ * cpuacct delta, both containers still idle):
+ *   personal — 1.10% of a core   (vs 6.8% lifetime average)
+ *   business — 2.21% of a core   (vs 16.0% lifetime average)
+ *   whole containers: personal 2.28%, business 2.99%
+ * So a parked page burns hard for a while and then largely quiesces — Amazon's
+ * ad-refresh and carousel timers back off after a page has sat untouched for
+ * long enough. The cost of NOT parking is therefore concentrated in the window
+ * right after each tool call, not spread evenly across the container's life.
+ * Two consequences worth remembering before anyone re-derives this:
+ *   1. A "container is burning N% forever" reading taken shortly after activity
+ *      will overstate the steady-state cost by roughly 5-7x. Always measure a
+ *      delta over a fixed window; ps TIME and ps %CPU are lifetime averages.
+ *   2. This affects BOTH containers and is a property of the image, not of one
+ *      wedged instance. Business is consistently the worse of the two because
+ *      it parks on a heavier page. Do not diagnose it as "one instance wedged".
+ * Confidence: the two rate measurements are Verified (direct cgroup deltas over
+ * a fixed window). That timer back-off is the mechanism behind the decay is
+ * Inferred — not isolated experimentally.
+ *
  * Fix: once the singleton page has gone IDLE_PAGE_PARK_MS without a getPage()
  * call, navigate it to about:blank. Cookies live on the BrowserContext and in
  * the persistent user-data dir, NOT on the page, so parking does not touch the
