@@ -16,7 +16,7 @@ import {
   getCartBusiness,
 } from './amazon-business';
 import { placeOrder } from './place-order';
-import { closeBrowser, getContext, getPage } from './browser';
+import { closeBrowser, getContext, getPage, startIdlePageReaper } from './browser';
 import { saveAmazonSession, restoreAmazonSession } from './session-manager';
 import { dumpDom, inspectSelectors, findText } from './debug';
 import {
@@ -685,6 +685,11 @@ app.listen(PORT, async () => {
         console.error('Failed to auto-save session:', error);
       }
     }, 5 * 60 * 1000);
+
+    // Park the singleton page on about:blank once it goes idle, so a
+    // left-over Amazon page does not keep burning CPU for days. See the
+    // idle-page reaper comment in browser.ts for the measurements.
+    startIdlePageReaper();
   } catch (error) {
     console.error('✗ Failed to initialize browser:', error);
   }
