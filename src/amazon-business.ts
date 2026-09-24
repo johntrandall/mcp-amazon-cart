@@ -98,10 +98,10 @@ export async function searchProductsBusiness(query: string): Promise<OperationRe
     const results = await page.evaluate(() => {
       const items = Array.from(document.querySelectorAll('[data-component-type="s-search-result"]')) as Element[];
       return items.slice(0, 5).map((item: Element) => {
-        const titleEl = item.querySelector('h2 a span');
+        const titleEl = item.querySelector('a.a-link-normal h2, h2 a span');
         const priceWhole = item.querySelector('.a-price-whole');
         const priceFraction = item.querySelector('.a-price-fraction');
-        const ratingEl = item.querySelector('.a-icon-star-small span');
+        const ratingEl = item.querySelector('.a-icon-alt');
         const imageEl = item.querySelector('img.s-image');
         const asinAttr = item.getAttribute('data-asin');
 
