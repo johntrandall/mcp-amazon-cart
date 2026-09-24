@@ -243,7 +243,7 @@ export async function getCartBusiness(): Promise<OperationResult> {
       ) as Element[];
       return cartItems.map((item: Element) => {
         const titleEl = item.querySelector('.sc-product-title');
-        const priceEl = item.querySelector('.sc-product-price');
+        const priceEl = item.querySelector('.sc-product-price, .a-price .a-offscreen');
         const quantityEl = item.querySelector('[name^="quantity"]') as HTMLSelectElement;
         const imageEl = item.querySelector('img');
         const asinAttr = item.getAttribute('data-asin');
@@ -259,7 +259,7 @@ export async function getCartBusiness(): Promise<OperationResult> {
     });
 
     const subtotal = await page.evaluate(() => {
-      const subtotalEl = document.querySelector('#sc-subtotal-amount-activecart .sc-price');
+      const subtotalEl = document.querySelector('#sc-subtotal-amount-activecart .sc-price, #sc-subtotal-amount-buybox .sc-price');
       return subtotalEl?.textContent?.trim() || '$0.00';
     });
 

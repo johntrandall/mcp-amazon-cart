@@ -29,7 +29,13 @@
 # ────────────────────────────────────────────────────────────────────────
 # Stage 1 — build
 # ────────────────────────────────────────────────────────────────────────
-FROM node:20-bookworm AS build
+# Base images are DIGEST-PINNED so the same commit always builds the same image.
+# Why: 2026-09-23 found the personal tenant on a dangling untagged image and the
+# business tenant on :local -- two tenants, two different builds, and nothing made
+# that detectable. Floating :20-bookworm is one of the two inputs that drifted.
+# Bump deliberately (re-resolve with `docker inspect --format '{{index .RepoDigests 0}}'`),
+# never silently. Resolved 2026-09-23.
+FROM node:20-bookworm@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5 AS build
 
 WORKDIR /app
 
@@ -56,7 +62,7 @@ RUN npx tsc
 # ────────────────────────────────────────────────────────────────────────
 # Stage 2 — runtime
 # ────────────────────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS runtime
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runtime
 
 # System dependencies:
 #   - Chromium/Chrome runtime libs (standard Playwright/Chrome list, copied

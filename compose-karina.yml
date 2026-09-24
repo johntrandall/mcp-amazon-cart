@@ -1,0 +1,143 @@
+# Karina's personal Amazon — THIRD tenant of the amazon-cart family, alongside
+# compose-personal.yml (John, 8937/5937) and compose-business.yml (JKRE, 8938/5938).
+#
+# Ports 8947 (MCP) + 5939 (VNC) cleared 2026-09-23 against all four port-assignment
+# checks: nothing listening on Umbridge, absent from the MCP + Services inventories,
+# absent from the ADRs (the .svg hits are path coordinates, not ports), and absent
+# from the portainer-stacks composes. 8939 was the obvious next number and is TAKEN
+# (google-workspace-mcp-max); 8940 is bambu-printer-onprem; 8941-8942 are reserved
+# for Tessera; 8946 is reserved for ebay-onprem. Hence 8947.
+#
+# Credentials: AMAZON_LOGIN_*_1P_PATH point at 'Amazon - Karina Personal' in the
+# JRVIS Execution vault (renamed 2026-09-23 from the autofill title 'amazon.com
+# Karina' to match its two siblings). That vault is mandatory, not stylistic: the
+# item-scoped service account can read ONLY JRVIS Execution, and an op:// path
+# resolving anywhere else fails as 'op_token_invalid', which reads as a dead token.
+#
+# NOTE: the item has username + password but NO one-time-password field, so
+# AMAZON_LOGIN_TOTP_1P_PATH is intentionally empty. If Karina has 2FA on her Amazon
+# account, unattended re-auth will stall at the code prompt and she will need a VNC
+# login on :5939. The John tenant has the same shape and works.
+
+# mcp-amazon-cart-karina — Portainer stack
+#
+# Dedicated container for John's PERSONAL Amazon account. The matching
+# business stack lives in compose-business.yml; they share the same image
+# build but DIFFERENT persistent named volumes so the Chrome profiles
+# (cookies, login session, address book) don't cross-contaminate.
+#
+# Ports (corrected 2026-06-12 — original briefing said 8935/5935 but
+# 8935 = browser-p0-unbrowser and 8936 = chase-mcp-onprem are already
+# in use per inventories/MCP-Server-Inventory.md). Personal stack takes
+# 8937 (HTTP) + 5937 (VNC); business stack takes 8938 + 5938.
+#
+# Pattern source: ~/dev/browser-pool-stealth-patchright/docker-compose.yml
+# (web-p1s-stealth-pool). Adaptations vs P1s:
+#   - Build context lives in this repo (P1s has its own).
+#   - Per-stack named volume for the Amazon profile (P1s has one shared volume).
+#   - Adds VNC port-mapping + VNC_PASSWORD env (P1s has no VNC layer).
+#   - mem_limit raised to 3g + NODE_OPTIONS=2048 per P1s OOM lesson
+#     (Verified 2026-05-25 / 2026-05-27 — see SKILL.md).
+#   - HEADLESS defaults to "true"; flip to "false" temporarily for the
+#     first-run VNC bootstrap (then redeploy with "true" for normal ops).
+#
+# Tailscale exposure: bare port mapping `8937:3000` defaults to all
+# interfaces (matches every other Synology stack in setup/synology/*).
+# Tailscale ACL is the perimeter; bearer token (AUTH_TOKEN) is the
+# inner gate. See conventions/host-routing-address-policy.md and
+# ADR-086 for the tailnet-exposure framing.
+
+services:
+  mcp-amazon-cart-karina:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-amazon-cart:local
+    container_name: mcp-amazon-cart-karina
+    restart: unless-stopped
+
+    # 3 GiB = node V8 heap cap (2 GiB, see Dockerfile NODE_OPTIONS) +
+    # Chrome RSS (~600 MiB steady-state, single tab) + Xvfb + x11vnc +
+    # headroom. P1s previously ran at 1536m and V8 aborted with
+    # "Ineffective mark-compacts near heap limit" at ~750 MiB
+    # (Verified 2026-05-25). Do not lower without re-verifying.
+    mem_limit: 3g
+    cpu_shares: 1024
+
+    # Chrome needs /dev/shm > 64 MB or it crashes on complex pages.
+    shm_size: 2gb
+
+    ports:
+      # MCP HTTP — host:container, bare = all interfaces.
+      # Tailnet clients hit umbridge:8937; bearer token is the inner gate.
+      - "8947:3000"
+      # VNC — host:container, bare = all interfaces. Tailscale ACL
+      # is the only network gate; VNC_PASSWORD is the inner gate.
+      - "5939:5900"
+
+    environment:
+      AMAZON_DOMAIN: amazon.com
+      USER_DATA_DIR: /data/user-data
+      # First-run bootstrap: flip HEADLESS=false here, redeploy, VNC in,
+      # log in to Amazon, close window, flip HEADLESS=true, redeploy.
+      HEADLESS: ${HEADLESS:-true}
+      MCP_HTTP_PORT: "3000"
+      DISPLAY: ":99"
+      DISPLAY_NUM: "99"
+      VNC_PORT: "5900"
+      # Bearer for Express MCP transport (madebydia's auth pattern).
+      AUTH_TOKEN: ${AUTH_TOKEN}
+      # x11vnc password — staged at runtime into /root/.vnc/passwd by
+      # entrypoint.sh. Empty value disables x11vnc (entrypoint refuses
+      # to start it unauthenticated).
+      VNC_PASSWORD: ${VNC_PASSWORD}
+      TZ: "America/New_York"
+      # Host-side path prefix for QR PNG files and audit JSON logs.
+      # Required: returns module fails to start without this env var.
+      # Synology host path — /Users/johnrandall is macOS-only; on Synology
+      # the Docker data volume at /volume1/docker is the standard writable area.
+      RETURNS_HOST_PATH_PREFIX: /volume1/docker/amazon-returns
+      # ---- v1.1 session-health (runtime `op read` from 1Password) ----
+      # OP_SERVICE_ACCOUNT_TOKEN is item-scoped to the three 1P entries
+      # below + the Pushover - mcp-amazon-cart entry. Rotate every 90 days.
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN}
+      # Literal op:// paths (not secrets). Personal account:
+      #   op://JRVIS Execution/Amazon Personal/username
+      #   op://JRVIS Execution/Amazon Personal/password
+      #   op://JRVIS Execution/Amazon Personal/one-time password   (optional, only if MFA enabled)
+      AMAZON_LOGIN_EMAIL_1P_PATH: ${AMAZON_LOGIN_EMAIL_1P_PATH}
+      AMAZON_LOGIN_PASSWORD_1P_PATH: ${AMAZON_LOGIN_PASSWORD_1P_PATH}
+      AMAZON_LOGIN_TOTP_1P_PATH: ${AMAZON_LOGIN_TOTP_1P_PATH:-}
+      # Pushover emergency-escalation channel — dedicated app entry:
+      #   op://JRVIS Infra/Pushover - mcp-amazon-cart/app_token
+      #   op://JRVIS Infra/Pushover - mcp-amazon-cart/user_key
+      PUSHOVER_APP_TOKEN_1P_PATH: ${PUSHOVER_APP_TOKEN_1P_PATH}
+      PUSHOVER_USER_KEY_1P_PATH: ${PUSHOVER_USER_KEY_1P_PATH}
+      # PUSHOVER_TEST_MODE=true → priority 0 (silent) for the criterion-4
+      # Pushover-fire smoke test during Phase 5 OBSERVE.
+      PUSHOVER_TEST_MODE: ${PUSHOVER_TEST_MODE:-false}
+
+    volumes:
+      # Persistent Amazon Personal Chrome profile. Survives container
+      # restarts so John's Amazon login persists across redeploys.
+      - mcp-amazon-cart-karina_user-data:/data/user-data
+      # Returns QR PNGs + audit logs: host path ↔ container path.
+      # Without this mount finalize_return writes to an ephemeral path
+      # the host-side print-qr skill can't reach.
+      - /volume1/docker/amazon-returns:/var/lib/amazon-cart/returns
+      # v1.1 session-health audit log directory (daily-rotated JSONL).
+      # Host path must be excluded from Hyper Backup AND Cloud Sync
+      # stignore — audit records carry credential-rotation history.
+      - /volume1/docker/amazon-cart-session-health:/var/lib/amazon-cart/session-health
+
+    # DNS — let the container resolve Tailscale + LAN hostnames.
+    # Matches P1s convention.
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
+
+    # Healthcheck is defined in the Dockerfile (HEALTHCHECK directive).
+
+volumes:
+  mcp-amazon-cart-karina_user-data:
+    name: mcp-amazon-cart-karina_user-data
