@@ -28,10 +28,18 @@
 
 services:
   mcp-amazon-cart-personal:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: mcp-amazon-cart:local
+    # PINNED BY DIGEST (2026-09-24). Do NOT restore `build:` here.
+    # Each stack used to build its own image and write the same
+    # `mcp-amazon-cart:local` tag, so the tag pointed at whichever stack built
+    # last and each container was pinned to its own image id. That is how the
+    # personal tenant ended up on a dangling untagged image while business ran
+    # the tag. Now all three reference ONE artifact built once and pushed to
+    # Zot, so divergence is structurally impossible rather than merely
+    # detectable. Ship a new version by building, pushing and bumping this
+    # digest deliberately -- never by redeploying and hoping.
+    # Verify with `docker inspect --format '{{.Config.Image}}'`; `docker ps`
+    # STRIPS the @sha256 and will make a pinned container look unpinned.
+    image: localhost:5050/vendor/mcp-amazon-cart@sha256:6c3770da2c6c5e4be6f5b1210897d85b00ce038f5ae5a5780df7917978ab9ea2
     container_name: mcp-amazon-cart-personal
     restart: unless-stopped
 
