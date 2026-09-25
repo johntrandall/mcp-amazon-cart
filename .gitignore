@@ -1,6 +1,11 @@
 # Dependencies
 node_modules/
-package-lock.json
+# package-lock.json is COMMITTED deliberately (2026-09-24). Upstream
+# (madebydia) gitignores it, and that inheritance meant every Portainer
+# git-backed build fell through the Dockerfile's `npm ci || npm install`
+# fallback to `npm install` — resolving the whole dependency tree fresh on
+# each build. Digest-pinning the base image did not help while npm floated.
+# This is a deployed application, not a library: the lockfile belongs in git.
 yarn.lock
 
 # Build output
